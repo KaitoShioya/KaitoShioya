@@ -29,7 +29,7 @@ Here are some ideas to get you started:
 
 ### Programming languages
 
-![Python](https://img.shields.io/badge/-Python-000?&logo=Python) ![TypeScript](https://img.shields.io/badge/-TypeScript-000?&logo=TypeScript) ![JavaScript](https://img.shields.io/badge/-JavaScript-000?&logo=JavaScript) ![HCL](https://img.shields.io/badge/-HCL-000?&logo=HCL) ![Makefile](https://img.shields.io/badge/-Makefile-000?&logo=Makefile) ![VBA](https://img.shields.io/badge/-VBA-000?&logo=VBA) ![Visual Basic 6.0](https://img.shields.io/badge/-Visual%20Basic%206.0-000?&logo=Visual%20Basic%206.0)
+![Python](https://img.shields.io/badge/-Python-000?&logo=Python) ![TypeScript](https://img.shields.io/badge/-TypeScript-000?&logo=TypeScript) ![JavaScript](https://img.shields.io/badge/-JavaScript-000?&logo=JavaScript)
 
 
 ### Frontend development
@@ -42,13 +42,8 @@ Here are some ideas to get you started:
 ![FastAPI](https://img.shields.io/badge/-FastAPI-000?&logo=FastAPI)
 
 
-### Databases
-
-![PostgreSQL](https://img.shields.io/badge/-PostgreSQL-000?&logo=PostgreSQL)
-
-
 ### DevOps
 
-![GitHub Actions](https://img.shields.io/badge/-GitHub%20Actions-000?&logo=GitHub%20Actions) ![Docker](https://img.shields.io/badge/-Docker-000?&logo=Docker) ![AWS](https://img.shields.io/badge/-AWS-000?&logo=AWS) ![GCP](https://img.shields.io/badge/-GCP-000?&logo=GCP) ![Terraform](https://img.shields.io/badge/-Terraform-000?&logo=Terraform)
+![GitHub Actions](https://img.shields.io/badge/-GitHub%20Actions-000?&logo=GitHub%20Actions) ![Docker](https://img.shields.io/badge/-Docker-000?&logo=Docker)
 
 <!-- SKILLS-END -->
