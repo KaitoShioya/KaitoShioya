@@ -360,8 +360,8 @@ def badge_has_logo(url):
     background = max(counts.items(), key=lambda x: x[1])[0]
 
     # thresholds (tunable)
-    threshold_color = 25.0        # color distance threshold
-    threshold_fraction = 0.005   # fraction of pixels in left half that must differ from background
+    threshold_color = 0.0        # color distance threshold
+    threshold_fraction = 0.0001   # fraction of pixels in left half that must differ from background
 
     total_pixels = 0
     diff_pixels = 0
