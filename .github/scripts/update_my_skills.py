@@ -23,8 +23,10 @@ REPO_LIST = os.getenv("REPO_LIST")  # optional: "owner/repo,owner2/repo2"
 
 HEADERS = {}
 if ACCESS_TOKEN:
+    print("Loading ACCESS_TOKEN")
     HEADERS["Authorization"] = f"token {ACCESS_TOKEN}"
 elif GITHUB_TOKEN:
+    print("Loading GITHUB_TOKEN")
     HEADERS["Authorization"] = f"token {GITHUB_TOKEN}"
 HEADERS["Accept"] = "application/vnd.github.v3+json"
 
