@@ -25,6 +25,8 @@ Here are some ideas to get you started:
 
 
 <!-- SKILLS-START -->
+## 🛠️ My Skills
+
 ### Programming languages
 
 ![Python](https://img.shields.io/badge/-Python-000?&logo=Python) ![TypeScript](https://img.shields.io/badge/-TypeScript-000?&logo=TypeScript) ![JavaScript](https://img.shields.io/badge/-JavaScript-000?&logo=JavaScript)
