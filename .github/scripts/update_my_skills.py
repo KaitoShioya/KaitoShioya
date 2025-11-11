@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # .github/scripts/update_my_skills.py
 """
-Updated script (small modifications per user request):
-- Prepend "## 🛠️ My Skills" heading at the start of the skills section.
-- DevOps detection extended to include cloud providers and operation tools:
-  AWS, GCP, Azure, Prometheus, Grafana, Nginx, Chef, Consul.
-Other behavior unchanged.
+Updated script:
+- Categorized badges (Programming languages, Frontend development, Misc tools, Services & Frameworks, Databases, DevOps)
+- Badge URL format unchanged
+- Exclude: Jupyter Notebook, Dockerfile, CSS, HTML, Shell from badge output
+- Exclude forked repos from analysis
+- **Added**: improved DevOps/cloud detection (AWS, GCP, Azure, Prometheus, Grafana, Nginx, Chef, Consul)
 """
 import os
 import requests
@@ -105,7 +106,7 @@ SERVICE_KEYWORDS = {
     "kafka": "Kafka",
 }
 
-# DevOps keywords: extended to include clouds and ops tools per request
+# DevOps keywords: kept as a fallback map; detection enhanced below
 DEVOPS_KEYWORDS = {
     "docker": "Docker",
     "kubernetes": "Kubernetes",
@@ -118,14 +119,13 @@ DEVOPS_KEYWORDS = {
     "circleci": "CircleCI",
     "gitlab-ci": "GitLab CI",
     "travis": "Travis CI",
-    # cloud providers
+    # cloud providers and ops tools may also be matched here as fallback
     "aws": "AWS",
     "amazon web services": "AWS",
     "gcp": "GCP",
     "google cloud": "GCP",
     "azure": "Azure",
     "microsoft azure": "Azure",
-    # operation / monitoring tools
     "prometheus": "Prometheus",
     "grafana": "Grafana",
     "nginx": "Nginx",
@@ -246,6 +246,7 @@ def detect_for_repo(full):
         pass
 
     candidates_to_fetch = []
+    # expand candidates to include cloud and ops config filenames and common directories
     for p in paths:
         basename = os.path.basename(p).lower()
         if basename in FILE_TOOL_MAP:
@@ -261,6 +262,19 @@ def detect_for_repo(full):
         if basename in {"package.json", "requirements.txt", "pyproject.toml", "pom.xml", "go.mod", "composer.json", "Gemfile", "Cargo.toml"}:
             candidates_to_fetch.append(p)
 
+        # Cloud / CI / operations related filenames (added)
+        if any(key in basename for key in ("cloudformation", "cloudformation.json", "cloudformation.yml", "serverless.yml", "serverless.yaml",
+                                           "azure-pipelines.yml", "azure-pipelines.yaml", "cloudbuild.yaml", "cloudbuild.yml",
+                                           "sam.yaml", "sam.yml", "prometheus.yml", "prometheus.yaml", "grafana.ini",
+                                           "nginx.conf", "nginx.conf.default", "consul.hcl", "consul.json", "berksfile")):
+            candidates_to_fetch.append(p)
+        # detect Chef cookbook dir or recipes files
+        if "/recipes/" in p.lower() or basename == "metadata.rb" or basename == "berksfile":
+            candidates_to_fetch.append(p)
+        # helm chart files
+        if p.lower().endswith("chart.yaml") or "/charts/" in p.lower():
+            candidates_to_fetch.append(p)
+
     content_blob = ""
     for path in set(candidates_to_fetch):
         txt = get_file_content(owner, r, path)
@@ -268,32 +282,85 @@ def detect_for_repo(full):
             content_blob += "\n" + txt.lower()
         time.sleep(0.08)
 
+    # DB detection
     dbs_found = scan_file_text_for_keywords(content_blob, DB_KEYWORDS)
     for d in dbs_found:
         detected["dbs"].add(d)
 
+    # Frontend detection
     fe_found = scan_file_text_for_keywords(content_blob, FRONTEND_KEYWORDS)
     for f in fe_found:
         detected["frontend"].add(f)
 
+    # Service/framework detection
     svc_found = scan_file_text_for_keywords(content_blob, SERVICE_KEYWORDS)
     for s in svc_found:
         detected["services"].add(s)
 
+    # DevOps detection via DEVOPS_KEYWORDS (fallback)
     dev_found = scan_file_text_for_keywords(content_blob, DEVOPS_KEYWORDS)
     for d in dev_found:
         detected["devops"].add(d)
 
-    if "redis" in content_blob:
-        detected["dbs"].add("Redis")
-    if "graphql" in content_blob:
-        detected["services"].add("GraphQL")
+    # Additional targeted cloud/ops pattern detection for better accuracy
+    CLOUD_PATTERNS = {
+        'provider "aws"': "AWS",
+        'provider "google"': "GCP",
+        'provider "google-beta"': "GCP",
+        'provider "azurerm"': "Azure",
+        "cloudformation": "AWS",
+        "serverless": "AWS",
+        "sam": "AWS",
+        "gcloud": "GCP",
+        "google cloud": "GCP",
+        "azurerm": "Azure",
+        "azure pipelines": "Azure",
+        "azure-pipelines": "Azure",
+    }
+    OPS_PATTERNS = {
+        "prometheus": "Prometheus",
+        "grafana": "Grafana",
+        "nginx": "Nginx",
+        "chef": "Chef",
+        "consul": "Consul",
+        "prometheus.yml": "Prometheus",
+        "grafana.ini": "Grafana",
+        "consul.hcl": "Consul",
+        "berksfile": "Chef",
+        "recipes/": "Chef",
+    }
+
+    # search content for cloud patterns
+    for k, name in CLOUD_PATTERNS.items():
+        if k in content_blob:
+            detected["devops"].add(name)
+
+    # search content for ops patterns
+    for k, name in OPS_PATTERNS.items():
+        if k in content_blob:
+            detected["devops"].add(name)
+
+    # small heuristics for common mentions
     if "kubernetes" in content_blob or "k8s" in content_blob:
         detected["devops"].add("Kubernetes")
     if ".github/workflows" in "\n".join(paths) or "github actions" in content_blob:
         detected["devops"].add("GitHub Actions")
+    if "terraform" in content_blob:
+        detected["devops"].add("Terraform")
+    if "helm" in content_blob:
+        detected["devops"].add("Helm")
+    if "prometheus" in content_blob:
+        detected["devops"].add("Prometheus")
+    if "grafana" in content_blob:
+        detected["devops"].add("Grafana")
+    if "nginx" in content_blob:
+        detected["devops"].add("Nginx")
+    if "consul" in content_blob:
+        detected["devops"].add("Consul")
+    if "chef" in content_blob or "cookbook" in content_blob:
+        detected["devops"].add("Chef")
 
-    # package.json dependency parsing
+    # package.json dependency parsing (also check for devops keywords)
     if any(p.lower().endswith("package.json") for p in paths):
         raw = get_file_content(owner, r, "package.json")
         if raw:
@@ -316,6 +383,13 @@ def detect_for_repo(full):
                 dev_found2 = scan_file_text_for_keywords(dep_keys, DEVOPS_KEYWORDS)
                 for dv in dev_found2:
                     detected["devops"].add(dv)
+                # also cloud / ops patterns in dependency names
+                for k, name in CLOUD_PATTERNS.items():
+                    if k in dep_keys:
+                        detected["devops"].add(name)
+                for k, name in OPS_PATTERNS.items():
+                    if k in dep_keys:
+                        detected["devops"].add(name)
             except Exception:
                 pass
 
