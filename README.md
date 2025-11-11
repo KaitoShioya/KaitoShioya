@@ -25,8 +25,23 @@ Here are some ideas to get you started:
 
 
 <!-- SKILLS-START -->
-### My Skills
+### Programming languages
 
-_No detected skills._
+![Python](https://img.shields.io/badge/-Python-000?&logo=Python) ![TypeScript](https://img.shields.io/badge/-TypeScript-000?&logo=TypeScript) ![JavaScript](https://img.shields.io/badge/-JavaScript-000?&logo=JavaScript)
+
+
+### Frontend development
+
+![Next.js](https://img.shields.io/badge/-Next.js-000?&logo=Next.js) ![React](https://img.shields.io/badge/-React-000?&logo=React)
+
+
+### Services & Frameworks
+
+![FastAPI](https://img.shields.io/badge/-FastAPI-000?&logo=FastAPI)
+
+
+### DevOps
+
+![GitHub Actions](https://img.shields.io/badge/-GitHub%20Actions-000?&logo=GitHub%20Actions) ![Docker](https://img.shields.io/badge/-Docker-000?&logo=Docker)
 
 <!-- SKILLS-END -->
