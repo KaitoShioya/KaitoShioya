@@ -34,7 +34,7 @@ Here are some ideas to get you started:
 
 ### Frontend development
 
-![Next.js](https://img.shields.io/badge/-Next.js-000?&logo=Next.js) ![React](https://img.shields.io/badge/-React-000?&logo=React)
+![React](https://img.shields.io/badge/-React-000?&logo=React) ![Next.js](https://img.shields.io/badge/-Next.js-000?&logo=Next.js)
 
 
 ### Services & Frameworks
