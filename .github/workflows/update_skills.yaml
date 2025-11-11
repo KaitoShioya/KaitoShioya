@@ -6,9 +6,7 @@ on:
     - cron: '0 3 * * 0' # 毎週日曜 03:00 UTC（必要なら変更）
 
 permissions:
-  contents: write   # README を更新するため
-  # NOTE: GITHUB_TOKEN は実行中リポジトリに対しては private でも使えるが
-  # 他リポジトリを横断する場合は下記の ACCESS_TOKEN を使います.
+  contents: write
 
 jobs:
   build:
@@ -27,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests PyYAML
+          pip install requests tomli
 
       - name: Run skill extractor and update README
         env:
