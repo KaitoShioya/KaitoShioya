@@ -18,7 +18,6 @@ Behavior:
 """
 
 import os
-import re
 import requests
 import time
 import urllib.parse
@@ -164,36 +163,9 @@ LANGUAGE_NORMALIZE = {
     "CSS": "CSS",
 }
 
-DS_LIB_KEYWORDS = {
-    "numpy": "NumPy",
-    "pandas": "Pandas",
-    "scikit-learn": "Scikit-learn",
-    "sklearn": "Scikit-learn",
-    "torch": "PyTorch",
-    "pytorch": "PyTorch",
-    "tensorflow": "TensorFlow",
-    "hydra": "Hydra",
-    "hydra-core": "Hydra",
-    "wandb": "WandB",
-    "optuna": "Optuna",
-    "transformers": "HuggingFace",
-    "datasets": "HuggingFace",
-    "sentence-transformers": "HuggingFace",
-    "keras": "Keras",
-    "xgboost": "XGBoost",
-    "lightgbm": "LightGBM",
-    "catboost": "CatBoost",
-    "spacy": "spaCy",
-    "statsmodels": "Statsmodels",
-    "scipy": "SciPy",
-    "gensim": "Gensim",
-    "fastai": "fastai",
-}
-
 category_map = {
     "Programming languages": Counter(),
     "Frontend development": Counter(),
-    "Data Science & AI": Counter(),
     "Misc tools": Counter(),
     "Services & Frameworks": Counter(),
     "Databases": Counter(),
@@ -335,51 +307,6 @@ def scan_file_text_for_keywords(text, keywords_map):
             found.add(label)
     return found
 
-_import_re = re.compile(r'^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import\s+(.+)|import\s+(.+))', re.MULTILINE)
-
-def parse_imports_from_py(text):
-    """
-    Returns two dicts:
-      imports_map: base_module -> set(alias or base_module)
-      from_imports_map: base_module -> set(symbol names imported)
-    All keys and values are lowercased.
-    """
-    imports_map = {}
-    from_imports_map = {}
-    if not text:
-        return imports_map, from_imports_map
-
-    for m in _import_re.finditer(text):
-        from_mod = m.group(1)
-        from_rest = m.group(2)
-        import_rest = m.group(3)
-
-        if from_mod:
-            base = from_mod.split('.')[0].lower()
-            # split symbols by comma
-            symbols = [s.strip() for s in re.split(r',\s*', from_rest)]
-            for sym in symbols:
-                # handle alias: "symbol as alias"
-                parts = [p.strip() for p in re.split(r'\s+as\s+', sym, flags=re.IGNORECASE)]
-                sym_name = parts[0].lower()
-                alias = parts[1].lower() if len(parts) > 1 else sym_name
-                from_imports_map.setdefault(base, set()).add(sym_name)
-                # Note: we do not add alias to imports_map for from-imports; usage detection will check symbol usage.
-        elif import_rest:
-            # handle multiple imports separated by comma
-            parts = [p.strip() for p in re.split(r',\s*', import_rest)]
-            for part in parts:
-                subparts = [p.strip() for p in re.split(r'\s+as\s+', part, flags=re.IGNORECASE)]
-                mod = subparts[0]
-                alias = subparts[1] if len(subparts) > 1 else None
-                base = mod.split('.')[0].lower()
-                if alias:
-                    alias = alias.lower()
-                    imports_map.setdefault(base, set()).add(alias)
-                else:
-                    imports_map.setdefault(base, set()).add(base)
-    return imports_map, from_imports_map
-
 # --- detection per repo ---
 def detect_for_repo(full):
     owner, r = full.split("/", 1)
@@ -392,7 +319,6 @@ def detect_for_repo(full):
         "services": set(),
         "dbs": set(),
         "devops": set(),
-        "datasci": set(),
         "misc": set(),
     }
     # languages via API
@@ -434,38 +360,12 @@ def detect_for_repo(full):
             candidates_to_fetch.append(p)
         if p.lower().endswith("chart.yaml") or "/charts/" in p.lower():
             candidates_to_fetch.append(p)
-        if p.lower().endswith(".py"):
-            candidates_to_fetch.append(p)
 
     content_blob = ""
-
-    imports_map_all = {}
-    from_imports_map_all = {}
-    file_texts = []  # list of strings
-
-    for path in sorted(set(candidates_to_fetch)):
+    for path in set(candidates_to_fetch):
         txt = get_file_content(owner, r, path)
         if txt:
             content_blob += "\n" + txt.lower()
-        else:
-            continue
-        lpath = path.lower()
-        # only extract imports from .py files (strong signal)
-        if lpath.endswith(".py"):
-            try:
-                imap, fmap = parse_imports_from_py(txt)
-                # merge into global maps
-                for k, v in imap.items():
-                    imports_map_all.setdefault(k, set()).update(v)
-                for k, v in fmap.items():
-                    from_imports_map_all.setdefault(k, set()).update(v)
-                file_texts.append(txt)
-            except Exception:
-                # if parsing fails, still add the file text for weaker scans
-                file_texts.append(txt)
-        else:
-            # other files added for general keyword scanning only
-            pass
         time.sleep(0.06)
 
     # DB detection
@@ -542,40 +442,6 @@ def detect_for_repo(full):
     if "chef" in content_blob or "cookbook" in content_blob:
         detected["devops"].add("Chef")
 
-    for ds_key, ds_label in DS_LIB_KEYWORDS.items():
-        base = ds_key.lower()
-        used = False
-
-        # 1) alias/module import usage
-        aliases = imports_map_all.get(base, set())
-        if aliases:
-            # check each file text for alias. or module. usage
-            for txt in file_texts:
-                txt_search = txt
-                for alias in aliases:
-                    # look for alias. (attribute access) -> strong indicator of actual usage
-                    if re.search(r'\b' + re.escape(alias) + r'\s*\.', txt_search):
-                        used = True
-                        break
-                if used:
-                    break
-
-        # 2) from-import usage (if someone did: from numpy import array)
-        if not used:
-            symbols = from_imports_map_all.get(base, set())
-            if symbols:
-                for txt in file_texts:
-                    for sym in symbols:
-                        # symbol( or symbol. usage
-                        if re.search(r'\b' + re.escape(sym) + r'\s*\(', txt) or re.search(r'\b' + re.escape(sym) + r'\s*\.', txt):
-                            used = True
-                            break
-                    if used:
-                        break
-
-        if used:
-            detected["datasci"].add(ds_label)
-
     # package.json parsing
     if any(p.lower().endswith("package.json") for p in paths):
         raw = get_file_content(owner, r, "package.json")
@@ -629,7 +495,6 @@ if not repos:
 aggregate = {
     "languages": Counter(),
     "frontend": Counter(),
-    "datasci": Counter(),
     "services": Counter(),
     "dbs": Counter(),
     "devops": Counter(),
@@ -652,15 +517,11 @@ for full in repos:
         aggregate["dbs"][d] += 1
     for dv in det.get("devops", []):
         aggregate["devops"][dv] += 1
-    for ds in det.get("datasci", []):
-        aggregate["datasci"][ds] += 1
 
 def add_skill(category, name):
     if name in PACKAGE_MANAGERS:
         return
     if name in FORBIDDEN_SKILLS:
-        return
-    if category == "Programming languages" and name in ("HCL", "VBA"):
         return
     category_map[category][name] += 1
 
@@ -669,9 +530,6 @@ for lang, _ in aggregate["languages"].most_common():
 
 for f, _ in aggregate["frontend"].most_common():
     add_skill("Frontend development", f)
-
-for ds, _ in aggregate["datasci"].most_common():
-    add_skill("Data Science & AI", ds)
 
 for s, _ in aggregate["services"].most_common():
     add_skill("Services & Frameworks", s)
@@ -686,7 +544,6 @@ sections = []
 order_of_categories = [
     "Programming languages",
     "Frontend development",
-    "Data Science & AI",
     "Misc tools",
     "Services & Frameworks",
     "Databases",
