@@ -32,6 +32,8 @@ REPO = os.getenv("REPO")
 ACCESS_TOKENS = os.getenv("ACCESS_TOKENS")  # comma-separated
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")    # legacy single token
 
+
+print(ACCESS_TOKENS)
 # Build list of tokens to try
 TOKENS = []
 if ACCESS_TOKENS:
