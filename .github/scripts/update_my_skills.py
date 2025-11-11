@@ -204,6 +204,7 @@ def list_repos_for_token(token):
         page += 1
         # small sleep to be polite
         time.sleep(0.05)
+    print(repos)
     return repos
 
 def list_public_user_repos(owner):
