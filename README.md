@@ -29,31 +29,26 @@ Here are some ideas to get you started:
 
 ### Programming languages
 
-![Python](https://img.shields.io/badge/-Python-000?&logo=Python) ![TypeScript](https://img.shields.io/badge/-TypeScript-000?&logo=TypeScript) ![JavaScript](https://img.shields.io/badge/-JavaScript-000?&logo=JavaScript) ![Makefile](https://img.shields.io/badge/-Makefile-000?&logo=Makefile) ![Visual Basic 6.0](https://img.shields.io/badge/-Visual%20Basic%206.0-000?&logo=Visual%20Basic%206.0)
+![Python](https://img.shields.io/badge/-Python-000?&logo=Python) ![TypeScript](https://img.shields.io/badge/-TypeScript-000?&logo=TypeScript) ![JavaScript](https://img.shields.io/badge/-JavaScript-000?&logo=JavaScript) ![HCL](https://img.shields.io/badge/-HCL-000?&logo=HCL) ![Makefile](https://img.shields.io/badge/-Makefile-000?&logo=Makefile) ![VBA](https://img.shields.io/badge/-VBA-000?&logo=VBA) ![Visual Basic 6.0](https://img.shields.io/badge/-Visual%20Basic%206.0-000?&logo=Visual%20Basic%206.0)
 
 
 ### Frontend development
 
-![Next.js](https://img.shields.io/badge/-Next.js-000?&logo=Next.js) ![React](https://img.shields.io/badge/-React-000?&logo=React) ![Nuxt](https://img.shields.io/badge/-Nuxt-000?&logo=Nuxt) ![Vite](https://img.shields.io/badge/-Vite-000?&logo=Vite) ![Vue.js](https://img.shields.io/badge/-Vue.js-000?&logo=Vue.js) ![Webpack](https://img.shields.io/badge/-Webpack-000?&logo=Webpack) ![Angular](https://img.shields.io/badge/-Angular-000?&logo=Angular) ![Svelte](https://img.shields.io/badge/-Svelte-000?&logo=Svelte)
-
-
-### Data Science & AI
-
-![NumPy](https://img.shields.io/badge/-NumPy-000?&logo=NumPy) ![Pandas](https://img.shields.io/badge/-Pandas-000?&logo=Pandas) ![Optuna](https://img.shields.io/badge/-Optuna-000?&logo=Optuna) ![Scikit-learn](https://img.shields.io/badge/-Scikit-learn-000?&logo=Scikit-learn) ![WandB](https://img.shields.io/badge/-WandB-000?&logo=WandB) ![TensorFlow](https://img.shields.io/badge/-TensorFlow-000?&logo=TensorFlow) ![PyTorch](https://img.shields.io/badge/-PyTorch-000?&logo=PyTorch)
+![React](https://img.shields.io/badge/-React-000?&logo=React) ![Next.js](https://img.shields.io/badge/-Next.js-000?&logo=Next.js)
 
 
 ### Services & Frameworks
 
-![FastAPI](https://img.shields.io/badge/-FastAPI-000?&logo=FastAPI) ![RabbitMQ](https://img.shields.io/badge/-RabbitMQ-000?&logo=RabbitMQ) ![ASP.NET](https://img.shields.io/badge/-ASP.NET-000?&logo=ASP.NET) ![Express](https://img.shields.io/badge/-Express-000?&logo=Express) ![Laravel](https://img.shields.io/badge/-Laravel-000?&logo=Laravel) ![Django](https://img.shields.io/badge/-Django-000?&logo=Django) ![Flask](https://img.shields.io/badge/-Flask-000?&logo=Flask) ![Kafka](https://img.shields.io/badge/-Kafka-000?&logo=Kafka) ![GraphQL](https://img.shields.io/badge/-GraphQL-000?&logo=GraphQL) ![Spring](https://img.shields.io/badge/-Spring-000?&logo=Spring)
+![FastAPI](https://img.shields.io/badge/-FastAPI-000?&logo=FastAPI)
 
 
 ### Databases
 
-![PostgreSQL](https://img.shields.io/badge/-PostgreSQL-000?&logo=PostgreSQL) ![SQLite](https://img.shields.io/badge/-SQLite-000?&logo=SQLite) ![SQL Server](https://img.shields.io/badge/-SQL%20Server-000?&logo=SQL%20Server) ![Redis](https://img.shields.io/badge/-Redis-000?&logo=Redis) ![MongoDB](https://img.shields.io/badge/-MongoDB-000?&logo=MongoDB) ![CockroachDB](https://img.shields.io/badge/-CockroachDB-000?&logo=CockroachDB) ![MySQL](https://img.shields.io/badge/-MySQL-000?&logo=MySQL) ![MariaDB](https://img.shields.io/badge/-MariaDB-000?&logo=MariaDB)
+![PostgreSQL](https://img.shields.io/badge/-PostgreSQL-000?&logo=PostgreSQL)
 
 
 ### DevOps
 
-![GitHub Actions](https://img.shields.io/badge/-GitHub%20Actions-000?&logo=GitHub%20Actions) ![Docker](https://img.shields.io/badge/-Docker-000?&logo=Docker) ![AWS](https://img.shields.io/badge/-AWS-000?&logo=AWS) ![GCP](https://img.shields.io/badge/-GCP-000?&logo=GCP) ![Terraform](https://img.shields.io/badge/-Terraform-000?&logo=Terraform) ![GitLab CI](https://img.shields.io/badge/-GitLab%20CI-000?&logo=GitLab%20CI) ![Nginx](https://img.shields.io/badge/-Nginx-000?&logo=Nginx) ![Kubernetes](https://img.shields.io/badge/-Kubernetes-000?&logo=Kubernetes) ![Chef](https://img.shields.io/badge/-Chef-000?&logo=Chef) ![CircleCI](https://img.shields.io/badge/-CircleCI-000?&logo=CircleCI) ![Grafana](https://img.shields.io/badge/-Grafana-000?&logo=Grafana) ![Azure](https://img.shields.io/badge/-Azure-000?&logo=Azure) ![Consul](https://img.shields.io/badge/-Consul-000?&logo=Consul) ![Travis CI](https://img.shields.io/badge/-Travis%20CI-000?&logo=Travis%20CI) ![Helm](https://img.shields.io/badge/-Helm-000?&logo=Helm) ![Ansible](https://img.shields.io/badge/-Ansible-000?&logo=Ansible) ![Prometheus](https://img.shields.io/badge/-Prometheus-000?&logo=Prometheus)
+![GitHub Actions](https://img.shields.io/badge/-GitHub%20Actions-000?&logo=GitHub%20Actions) ![Docker](https://img.shields.io/badge/-Docker-000?&logo=Docker) ![AWS](https://img.shields.io/badge/-AWS-000?&logo=AWS) ![GCP](https://img.shields.io/badge/-GCP-000?&logo=GCP) ![Terraform](https://img.shields.io/badge/-Terraform-000?&logo=Terraform)
 
 <!-- SKILLS-END -->
