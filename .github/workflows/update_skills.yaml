@@ -31,6 +31,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}        # optional; required to read other private repos
+          ACCESS_TOKENS: ${{ secrets.ACCESS_TOKENS }}
           OWNER: ${{ github.repository_owner }}
           REPO: ${{ github.event.repository.name }}
           REPO_LIST: ${{ secrets.REPO_LIST }}              # optional: "owner1/repo1,owner2/repo2"
