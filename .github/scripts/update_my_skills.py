@@ -23,7 +23,7 @@ REPO_LIST = os.getenv("REPO_LIST")  # optional: "owner/repo,owner2/repo2"
 
 HEADERS = {}
 if ACCESS_TOKEN:
-    print("Loading ACCESS_TOKEN")
+    print(f"Loading ACCESS_TOKEN: {ACCESS_TOKEN}")
     HEADERS["Authorization"] = f"token {ACCESS_TOKEN}"
 elif GITHUB_TOKEN:
     print("Loading GITHUB_TOKEN")
@@ -404,6 +404,8 @@ def badge_url_for(skill_name):
     label = urllib.parse.quote(f"-{skill_name}")
     logo = urllib.parse.quote(skill_name)
     return f"https://img.shields.io/badge/{label}-000?&logo={logo}"
+
+['KaitoShioya/algorithms-school-of-engineering', 'KaitoShioya/HPC-Ops', 'KaitoShioya/KaitoShioya', 'KaitoShioya/kanon-booking-app', 'KaitoShioya/Strogatz_Exercise', 'KaitoShioya/totp-auth-app']
 
 # ---------------------------
 # Main aggregation
