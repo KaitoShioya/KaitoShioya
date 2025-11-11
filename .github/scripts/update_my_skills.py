@@ -2,11 +2,11 @@
 # .github/scripts/update_my_skills.py
 """
 Updated script:
-- Categorized badges (Programming languages, Frontend development, Misc tools, Services & Frameworks, Databases, DevOps)
-- Badge URL format unchanged
-- Exclude: Jupyter Notebook, Dockerfile, CSS, HTML, Shell from badge output
-- Exclude forked repos from analysis
-- **Added**: improved DevOps/cloud detection (AWS, GCP, Azure, Prometheus, Grafana, Nginx, Chef, Consul)
+- When possible, list repositories via /user/repos?visibility=all (requires token) to include private repos.
+- If no token is available, fall back to /users/{OWNER}/repos (public repos only).
+- Preserve previous behavior: fork exclusion, category mapping, DB/service/devops detection.
+- Safe commit: only commit & push when README actually changed.
+- Keep existing env variables: ACCESS_TOKEN, GITHUB_TOKEN, OWNER, REPO, REPO_LIST.
 """
 import os
 import requests
@@ -19,15 +19,13 @@ OWNER = os.getenv("OWNER")
 REPO = os.getenv("REPO")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-REPO_LIST = os.getenv("REPO_LIST")  # optional: "owner/repo,owner2/repo2"
+REPO_LIST = os.getenv("REPO_LIST")  # optional: "owner1/repo1,owner2/repo2"
 
 HEADERS = {}
-if ACCESS_TOKEN:
-    print(f"Loading ACCESS_TOKEN: {ACCESS_TOKEN}")
-    HEADERS["Authorization"] = f"token {ACCESS_TOKEN}"
-elif GITHUB_TOKEN:
-    print("Loading GITHUB_TOKEN")
-    HEADERS["Authorization"] = f"token {GITHUB_TOKEN}"
+# Prefer ACCESS_TOKEN (PAT) if provided, else fall back to GITHUB_TOKEN
+token = ACCESS_TOKEN or GITHUB_TOKEN
+if token:
+    HEADERS["Authorization"] = f"token {token}"
 HEADERS["Accept"] = "application/vnd.github.v3+json"
 
 REQUEST_TIMEOUT = 30
@@ -58,7 +56,7 @@ PACKAGE_MANAGERS = {
     "npm", "yarn", "pip", "pipenv", "poetry", "composer", "cargo", "bundler", "gem"
 }
 
-# skills to forcibly exclude from final badges per your request
+# skills to forcibly exclude from final badges per user's request
 FORBIDDEN_SKILLS = {
     "Jupyter Notebook", "Dockerfile", "CSS", "HTML", "Shell"
 }
@@ -108,7 +106,7 @@ SERVICE_KEYWORDS = {
     "kafka": "Kafka",
 }
 
-# DevOps keywords: kept as a fallback map; detection enhanced below
+# DevOps keywords: kept as fallback map; detection enhanced below
 DEVOPS_KEYWORDS = {
     "docker": "Docker",
     "kubernetes": "Kubernetes",
@@ -121,7 +119,6 @@ DEVOPS_KEYWORDS = {
     "circleci": "CircleCI",
     "gitlab-ci": "GitLab CI",
     "travis": "Travis CI",
-    # cloud providers and ops tools may also be matched here as fallback
     "aws": "AWS",
     "amazon web services": "AWS",
     "gcp": "GCP",
@@ -149,7 +146,6 @@ LANGUAGE_NORMALIZE = {
     "Shell": "Shell",
     "HTML": "HTML",
     "CSS": "CSS",
-    "HTML": "HTML",
 }
 
 category_map = {
@@ -168,25 +164,61 @@ def api_get(path, params=None):
     return r.json()
 
 def list_all_repos():
+    """
+    Return list of repos in 'owner/name' form.
+
+    Behavior:
+    - If REPO_LIST env is set, return that list (comma-separated).
+    - Else if an auth token is present, use /user/repos?visibility=all to list all repos
+      accessible by the token (including private). This covers user-owned repos and
+      repos the token has access to.
+    - Else fall back to /users/{OWNER}/repos which returns public repos only.
+    - In all cases, paginate through results and exclude forks.
+    """
     if REPO_LIST:
         return [r.strip() for r in REPO_LIST.split(",") if r.strip()]
+
     repos = []
+    per_page = 100
     page = 1
-    while True:
-        try:
-            data = api_get(f"/users/{OWNER}/repos", params={"per_page": 100, "page": page, "type": "all"})
-        except requests.HTTPError:
-            break
-        if not data:
-            break
-        # filter out forks here
-        for r in data:
-            if r.get("fork"):
-                continue
-            repos.append(f"{r['owner']['login']}/{r['name']}")
-        if len(data) < 100:
-            break
-        page += 1
+
+    if token:
+        # Use authenticated endpoint to include private repos accessible by the token
+        while True:
+            try:
+                data = api_get("/user/repos", params={"per_page": per_page, "page": page, "visibility": "all", "affiliation": "owner,collaborator,organization_member"})
+            except requests.HTTPError as e:
+                print("Error fetching /user/repos:", e)
+                break
+            if not data:
+                break
+            for r in data:
+                # filter out forks
+                if r.get("fork"):
+                    continue
+                repos.append(f"{r['owner']['login']}/{r['name']}")
+            if len(data) < per_page:
+                break
+            page += 1
+    else:
+        # No token: fall back to public repos for OWNER
+        page = 1
+        while True:
+            try:
+                data = api_get(f"/users/{OWNER}/repos", params={"per_page": per_page, "page": page, "type": "all"})
+            except requests.HTTPError as e:
+                print("Error fetching /users/{OWNER}/repos:", e)
+                break
+            if not data:
+                break
+            for r in data:
+                if r.get("fork"):
+                    continue
+                repos.append(f"{r['owner']['login']}/{r['name']}")
+            if len(data) < per_page:
+                break
+            page += 1
+
     return repos
 
 def get_repo_default_branch(owner, repo):
@@ -201,6 +233,7 @@ def get_tree(owner, repo, branch):
 
 def get_file_content(owner, repo, path):
     try:
+        # use the contents API to fetch file (it returns base64 encoded content)
         r = requests.get(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{urllib.parse.quote(path, safe='')}",
                          headers=HEADERS, timeout=REQUEST_TIMEOUT)
         if r.status_code == 200:
@@ -405,13 +438,10 @@ def badge_url_for(skill_name):
     logo = urllib.parse.quote(skill_name)
     return f"https://img.shields.io/badge/{label}-000?&logo={logo}"
 
-['KaitoShioya/algorithms-school-of-engineering', 'KaitoShioya/HPC-Ops', 'KaitoShioya/KaitoShioya', 'KaitoShioya/kanon-booking-app', 'KaitoShioya/Strogatz_Exercise', 'KaitoShioya/totp-auth-app']
-
 # ---------------------------
 # Main aggregation
 # ---------------------------
 repos = list_all_repos()
-print(repos)
 if not repos:
     print("No repos found; exiting.")
     exit(0)
@@ -493,11 +523,10 @@ for cat in order_of_categories:
     if badges:
         sections.append(f"### {cat}\n\n{' '.join(badges)}\n")
 
-# ---- NEW: prepend the requested section heading ----
+# ---- prepend the requested section heading ----
 if not sections:
     new_section = "## 🛠️ My Skills\n\n_No detected skills._\n"
 else:
-    # join category sections, but ensure the requested main heading is at the top
     new_section = "## 🛠️ My Skills\n\n" + "\n\n".join(sections)
 
 # Write into README between markers
@@ -521,19 +550,41 @@ else:
     with open(README_PATH, "w", encoding="utf-8") as f:
         f.write(new_text)
 
-# commit & push (unchanged)
+# commit & push (safe: skip if no changes)
 import subprocess, sys
+
 try:
     subprocess.run(["git", "config", "user.name", "github-actions"], check=True)
     subprocess.run(["git", "config", "user.email", "github-actions@users.noreply.github.com"], check=True)
+
+    # stage the README (only what we modified)
     subprocess.run(["git", "add", README_PATH], check=True)
+
+    # check if there is anything to commit
+    status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True)
+    if not status.stdout.strip():
+        print("No changes to commit. Skipping commit and push.")
+        sys.exit(0)
+
+    # commit & push if changes exist
     subprocess.run(["git", "commit", "-m", "chore: update categorized My Skills badges (logo-checked) [skip ci]"], check=True)
+
     push_token = ACCESS_TOKEN or GITHUB_TOKEN
     if not push_token:
         print("No token available to push changes. Please set ACCESS_TOKEN or rely on GITHUB_TOKEN.")
         sys.exit(0)
+
     branch = os.getenv("GITHUB_REF_NAME") or "main"
     repo_url = f"https://{push_token}@github.com/{OWNER}/{REPO}.git"
+
     subprocess.run(["git", "push", repo_url, f"HEAD:refs/heads/{branch}"], check=True)
+    print("README updated and pushed successfully.")
 except subprocess.CalledProcessError as e:
+    # provide helpful log on failure
     print("Git error (commit/push):", e)
+    try:
+        subprocess.run(["git", "status"], check=False)
+        subprocess.run(["git", "log", "-1", "--oneline"], check=False)
+    except Exception:
+        pass
+    sys.exit(1)
