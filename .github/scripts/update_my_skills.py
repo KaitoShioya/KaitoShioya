@@ -409,6 +409,7 @@ def badge_url_for(skill_name):
 # Main aggregation
 # ---------------------------
 repos = list_all_repos()
+print(repos)
 if not repos:
     print("No repos found; exiting.")
     exit(0)
