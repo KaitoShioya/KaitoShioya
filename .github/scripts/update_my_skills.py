@@ -4,23 +4,20 @@
 Generate categorized skill badges for README from all repositories
 discoverable by a list of personal access tokens.
 
-Behavior:
-- Read ACCESS_TOKENS (comma-separated) or single ACCESS_TOKEN (backward-compatible).
-- For each token, call /user/repos?visibility=all and collect repos (exclude forks).
-- Deduplicate repos across tokens. Record which token discovered each repo in repo_token_map.
-- For each repo, use the token that discovered it when calling repo APIs / file contents.
-- Detect languages / frontend / services / databases / devops via heuristics.
-- Build README section between <!-- SKILLS-START --> and <!-- SKILLS-END --> with heading
-  "## 🛠️ My Skills" and categorized badges (Programming languages, Frontend development,
-  Misc tools, Services & Frameworks, Databases, DevOps).
-- Exclude package managers and forbidden skills from badges.
-- Safe commit: only commit & push when README changed; otherwise skip commit.
+Modifications:
+- Exclude HCL and VBA from Programming languages output.
+- Add Data Science & AI category and detect common DS/AI libraries by:
+  - scanning dependency files (requirements.txt, pyproject.toml, environment.yml, package.json)
+  - scanning source files (.py, .ipynb) for import/from statements
+  - scanning content blobs for known DS keywords
+Other behavior unchanged.
 """
-
 import os
 import requests
 import time
 import urllib.parse
+import re
+import json
 from collections import Counter
 
 GITHUB_API = "https://api.github.com"
@@ -28,25 +25,20 @@ OWNER = os.getenv("OWNER")
 REPO = os.getenv("REPO")
 
 # Multiple token support:
-# Either set ACCESS_TOKENS="token1,token2" or legacy ACCESS_TOKEN.
 ACCESS_TOKENS = os.getenv("ACCESS_TOKENS")  # comma-separated
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")    # legacy single token
 
-# Build list of tokens to try
 TOKENS = []
 if ACCESS_TOKENS:
-    print("Loading ACCESS_TOKEN list")
     for t in ACCESS_TOKENS.split(","):
         t = t.strip()
         if t:
             TOKENS.append(t)
 elif ACCESS_TOKEN:
     TOKENS.append(ACCESS_TOKEN)
-# If TOKENS is empty, we will fall back to unauthenticated public repo listing (requires OWNER)
 
 REQUEST_TIMEOUT = 30
-# map repo_str -> token that discovered it
-repo_token_map = {}
+repo_token_map = {}  # repo_str -> token that discovered it
 
 # --- detection heuristics maps ---
 FILE_TOOL_MAP = {
@@ -73,9 +65,28 @@ PACKAGE_MANAGERS = {
     "npm", "yarn", "pip", "pipenv", "poetry", "composer", "cargo", "bundler", "gem"
 }
 
-# skills to exclude
+# skills to exclude from final badges
 FORBIDDEN_SKILLS = {
     "Jupyter Notebook", "Dockerfile", "CSS", "HTML", "Shell"
+}
+
+# Programming languages normalization (GitHub languages)
+LANGUAGE_NORMALIZE = {
+    "JavaScript": "JavaScript",
+    "TypeScript": "TypeScript",
+    "Python": "Python",
+    "Go": "Go",
+    "Java": "Java",
+    "C#": "C#",
+    "C++": "C++",
+    "Ruby": "Ruby",
+    "PHP": "PHP",
+    "Rust": "Rust",
+    "Shell": "Shell",
+    "HTML": "HTML",
+    "CSS": "CSS",
+    "HCL": "HCL",
+    "VBA": "VBA",
 }
 
 DB_KEYWORDS = {
@@ -147,25 +158,41 @@ DEVOPS_KEYWORDS = {
     "consul": "Consul",
 }
 
-LANGUAGE_NORMALIZE = {
-    "JavaScript": "JavaScript",
-    "TypeScript": "TypeScript",
-    "Python": "Python",
-    "Go": "Go",
-    "Java": "Java",
-    "C#": "C#",
-    "C++": "C++",
-    "Ruby": "Ruby",
-    "PHP": "PHP",
-    "Rust": "Rust",
-    "Shell": "Shell",
-    "HTML": "HTML",
-    "CSS": "CSS",
+# Data Science & AI keywords mapping (package name -> normalized label)
+DS_LIB_KEYWORDS = {
+    "numpy": "NumPy",
+    "np": "NumPy",
+    "pandas": "Pandas",
+    "pd": "Pandas",
+    "scikit-learn": "Scikit-learn",
+    "sklearn": "Scikit-learn",
+    "torch": "PyTorch",
+    "pytorch": "PyTorch",
+    "tensorflow": "TensorFlow",
+    "tf": "TensorFlow",
+    "hydra": "Hydra",
+    "hydra-core": "Hydra",
+    "wandb": "WandB",
+    "optuna": "Optuna",
+    "transformers": "HuggingFace",
+    "datasets": "HuggingFace",
+    "sentence-transformers": "HuggingFace",
+    "keras": "Keras",
+    "xgboost": "XGBoost",
+    "lightgbm": "LightGBM",
+    "catboost": "CatBoost",
+    "spacy": "spaCy",
+    "statsmodels": "Statsmodels",
+    "scipy": "SciPy",
+    "gensim": "Gensim",
+    "fastai": "fastai",
+    # add others if needed
 }
 
 category_map = {
     "Programming languages": Counter(),
     "Frontend development": Counter(),
+    "Data Science & AI": Counter(),          # NEW category
     "Misc tools": Counter(),
     "Services & Frameworks": Counter(),
     "Databases": Counter(),
@@ -203,9 +230,7 @@ def list_repos_for_token(token):
         if len(data) < per_page:
             break
         page += 1
-        # small sleep to be polite
         time.sleep(0.05)
-    print(repos)
     return repos
 
 def list_public_user_repos(owner):
@@ -226,14 +251,7 @@ def list_public_user_repos(owner):
     return repos
 
 def list_all_repos():
-    """
-    Return sorted list of 'owner/name' repo strings to analyze.
-    - If TOKENS provided: for each token, list /user/repos and add discovered repos (exclude forks).
-      Record repo_token_map[repo_str] = token (first token that discovered it).
-    - If no TOKENS and OWNER provided: fall back to public /users/{OWNER}/repos.
-    """
     repo_set = set()
-    # if tokens given, gather per token
     if TOKENS:
         for token in TOKENS:
             api_items = list_repos_for_token(token)
@@ -248,7 +266,6 @@ def list_all_repos():
                 except Exception:
                     continue
     else:
-        # fallback public listing if OWNER is set
         if OWNER:
             pubs = list_public_user_repos(OWNER)
             for r in pubs:
@@ -263,7 +280,7 @@ def list_all_repos():
                     continue
     return sorted(repo_set)
 
-# --- repository file access helpers (use token that discovered repo when possible) ---
+# --- repository file access helpers ---
 def get_repo_default_branch(owner, repo):
     repo_str = f"{owner}/{repo}"
     token = repo_token_map.get(repo_str)
@@ -308,6 +325,32 @@ def scan_file_text_for_keywords(text, keywords_map):
             found.add(label)
     return found
 
+# find imports in python source text
+_import_re = re.compile(r'^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import|import\s+([A-Za-z0-9_\.]+))', re.MULTILINE)
+
+def extract_imports_from_py(text):
+    found = set()
+    for m in _import_re.finditer(text):
+        mod = m.group(1) or m.group(2)
+        if not mod:
+            continue
+        base = mod.split('.')[0].lower()
+        found.add(base)
+    return found
+
+def extract_imports_from_ipynb(nb_text):
+    found = set()
+    try:
+        nb = json.loads(nb_text)
+        for cell in nb.get("cells", []):
+            if cell.get("cell_type") != "code":
+                continue
+            src = "".join(cell.get("source", []) if isinstance(cell.get("source", []), list) else cell.get("source", ""))
+            found |= extract_imports_from_py(src)
+    except Exception:
+        pass
+    return found
+
 # --- detection per repo ---
 def detect_for_repo(full):
     owner, r = full.split("/", 1)
@@ -320,6 +363,7 @@ def detect_for_repo(full):
         "services": set(),
         "dbs": set(),
         "devops": set(),
+        "datasci": set(),   # new
         "misc": set(),
     }
     # languages via API
@@ -346,9 +390,9 @@ def detect_for_repo(full):
             candidates_to_fetch.append(p)
         if "dockerfile" in basename:
             candidates_to_fetch.append(p)
-        if basename in {".env", ".env.example", ".env.sample", "database.yml", "database.yaml", "application.yml", "config.yml"}:
+        if basename in {".env", ".env.example", ".env.sample", "database.yml", "database.yaml", "application.yml", "config.yml", "environment.yml"}:
             candidates_to_fetch.append(p)
-        if basename in {"package.json", "requirements.txt", "pyproject.toml", "pom.xml", "go.mod", "composer.json", "Gemfile", "Cargo.toml"}:
+        if basename in {"package.json", "requirements.txt", "pyproject.toml", "pom.xml", "go.mod", "composer.json", "Gemfile", "Cargo.toml", "environment.yml"}:
             candidates_to_fetch.append(p)
 
         # cloud/ops filenames
@@ -361,12 +405,25 @@ def detect_for_repo(full):
             candidates_to_fetch.append(p)
         if p.lower().endswith("chart.yaml") or "/charts/" in p.lower():
             candidates_to_fetch.append(p)
+        # include python and notebook files for import scanning
+        if p.lower().endswith(".py") or p.lower().endswith(".ipynb"):
+            candidates_to_fetch.append(p)
 
     content_blob = ""
-    for path in set(candidates_to_fetch):
+    code_imports = set()
+    # fetch candidate files (content_blob accumulates text for keyword scanning)
+    for path in sorted(set(candidates_to_fetch)):
         txt = get_file_content(owner, r, path)
-        if txt:
-            content_blob += "\n" + txt.lower()
+        if not txt:
+            continue
+        lpath = path.lower()
+        # accumulate for keyword scans
+        content_blob += "\n" + txt.lower()
+        # if python file, extract imports
+        if lpath.endswith(".py"):
+            code_imports |= extract_imports_from_py(txt)
+        elif lpath.endswith(".ipynb"):
+            code_imports |= extract_imports_from_ipynb(txt)
         time.sleep(0.06)
 
     # DB detection
@@ -389,7 +446,7 @@ def detect_for_repo(full):
     for d in dev_found:
         detected["devops"].add(d)
 
-    # Additional patterns
+    # Additional cloud/ops pattern detection
     CLOUD_PATTERNS = {
         'provider "aws"': "AWS",
         'provider "google"': "GCP",
@@ -424,6 +481,7 @@ def detect_for_repo(full):
         if k in content_blob:
             detected["devops"].add(name)
 
+    # heuristics
     if "kubernetes" in content_blob or "k8s" in content_blob:
         detected["devops"].add("Kubernetes")
     if ".github/workflows" in "\n".join(paths) or "github actions" in content_blob:
@@ -443,41 +501,25 @@ def detect_for_repo(full):
     if "chef" in content_blob or "cookbook" in content_blob:
         detected["devops"].add("Chef")
 
-    # package.json parsing
-    if any(p.lower().endswith("package.json") for p in paths):
-        raw = get_file_content(owner, r, "package.json")
-        if raw:
-            try:
-                import json
-                pj = json.loads(raw)
-                deps = {}
-                deps.update(pj.get("dependencies", {}))
-                deps.update(pj.get("devDependencies", {}))
-                dep_keys = " ".join(deps.keys()).lower()
-                fe_found2 = scan_file_text_for_keywords(dep_keys, FRONTEND_KEYWORDS)
-                for f in fe_found2:
-                    detected["frontend"].add(f)
-                svc_found2 = scan_file_text_for_keywords(dep_keys, SERVICE_KEYWORDS)
-                for s in svc_found2:
-                    detected["services"].add(s)
-                db_found2 = scan_file_text_for_keywords(dep_keys, DB_KEYWORDS)
-                for d in db_found2:
-                    detected["dbs"].add(d)
-                dev_found2 = scan_file_text_for_keywords(dep_keys, DEVOPS_KEYWORDS)
-                for dv in dev_found2:
-                    detected["devops"].add(dv)
-                for k, name in CLOUD_PATTERNS.items():
-                    if k in dep_keys:
-                        detected["devops"].add(name)
-                for k, name in OPS_PATTERNS.items():
-                    if k in dep_keys:
-                        detected["devops"].add(name)
-            except Exception:
-                pass
+    # --- Data Science & AI detection ---
+    # 1) keyword scan in content_blob
+    ds_found = scan_file_text_for_keywords(content_blob, DS_LIB_KEYWORDS)
+    for d in ds_found:
+        detected["datasci"].add(d)
+
+    # 2) code import scan (stronger signal)
+    for imp in code_imports:
+        if imp in DS_LIB_KEYWORDS:
+            detected["datasci"].add(DS_LIB_KEYWORDS[imp])
+        # also check for common aliases e.g., "np" -> numpy handled in mapping
+
+    # 3) requirements/environment files parsing: look for package tokens
+    # (note: content_blob already includes requirements files' content if present)
+    # we've already matched via ds_found above, so this is complementary.
 
     return detected
 
-# --- badge generation ---
+# --- badge generation (unchanged format) ---
 def badge_url_for(skill_name):
     label = urllib.parse.quote(f"-{skill_name}")
     logo = urllib.parse.quote(skill_name)
@@ -496,6 +538,7 @@ if not repos:
 aggregate = {
     "languages": Counter(),
     "frontend": Counter(),
+    "datasci": Counter(),     # new
     "services": Counter(),
     "dbs": Counter(),
     "devops": Counter(),
@@ -518,11 +561,17 @@ for full in repos:
         aggregate["dbs"][d] += 1
     for dv in det.get("devops", []):
         aggregate["devops"][dv] += 1
+    for ds in det.get("datasci", []):
+        aggregate["datasci"][ds] += 1
 
 def add_skill(category, name):
+    # exclude package managers and forbidden skills
     if name in PACKAGE_MANAGERS:
         return
     if name in FORBIDDEN_SKILLS:
+        return
+    # exclude HCL and VBA from Programming languages output
+    if category == "Programming languages" and name in ("HCL", "VBA"):
         return
     category_map[category][name] += 1
 
@@ -531,6 +580,9 @@ for lang, _ in aggregate["languages"].most_common():
 
 for f, _ in aggregate["frontend"].most_common():
     add_skill("Frontend development", f)
+
+for ds, _ in aggregate["datasci"].most_common():
+    add_skill("Data Science & AI", ds)
 
 for s, _ in aggregate["services"].most_common():
     add_skill("Services & Frameworks", s)
@@ -541,10 +593,12 @@ for d, _ in aggregate["dbs"].most_common():
 for dv, _ in aggregate["devops"].most_common():
     add_skill("DevOps", dv)
 
+# Build sections in order (include the new category)
 sections = []
 order_of_categories = [
     "Programming languages",
     "Frontend development",
+    "Data Science & AI",    # new
     "Misc tools",
     "Services & Frameworks",
     "Databases",
@@ -552,7 +606,7 @@ order_of_categories = [
 ]
 
 for cat in order_of_categories:
-    counter = category_map[cat]
+    counter = category_map.get(cat, Counter())
     if not counter:
         continue
     items = [k for k, _ in counter.most_common()]
