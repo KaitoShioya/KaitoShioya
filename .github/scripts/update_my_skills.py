@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 # .github/scripts/update_my_skills.py
 """
-Updated script:
-- When possible, list repositories via /user/repos?visibility=all (requires token) to include private repos.
-- If no token is available, fall back to /users/{OWNER}/repos (public repos only).
-- Preserve previous behavior: fork exclusion, category mapping, DB/service/devops detection.
-- Safe commit: only commit & push when README actually changed.
-- Keep existing env variables: ACCESS_TOKEN, GITHUB_TOKEN, OWNER, REPO, REPO_LIST.
+Generate categorized skill badges for README from all repositories
+discoverable by a list of personal access tokens.
+
+Behavior:
+- Read ACCESS_TOKENS (comma-separated) or single ACCESS_TOKEN (backward-compatible).
+- For each token, call /user/repos?visibility=all and collect repos (exclude forks).
+- Deduplicate repos across tokens. Record which token discovered each repo in repo_token_map.
+- For each repo, use the token that discovered it when calling repo APIs / file contents.
+- Detect languages / frontend / services / databases / devops via heuristics.
+- Build README section between <!-- SKILLS-START --> and <!-- SKILLS-END --> with heading
+  "## 🛠️ My Skills" and categorized badges (Programming languages, Frontend development,
+  Misc tools, Services & Frameworks, Databases, DevOps).
+- Exclude package managers and forbidden skills from badges.
+- Safe commit: only commit & push when README changed; otherwise skip commit.
 """
+
 import os
 import requests
 import time
@@ -17,20 +26,28 @@ from collections import Counter
 GITHUB_API = "https://api.github.com"
 OWNER = os.getenv("OWNER")
 REPO = os.getenv("REPO")
-ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-REPO_LIST = os.getenv("REPO_LIST")  # optional: "owner1/repo1,owner2/repo2"
 
-HEADERS = {}
-# Prefer ACCESS_TOKEN (PAT) if provided, else fall back to GITHUB_TOKEN
-token = ACCESS_TOKEN or GITHUB_TOKEN
-if token:
-    HEADERS["Authorization"] = f"token {token}"
-HEADERS["Accept"] = "application/vnd.github.v3+json"
+# Multiple token support:
+# Either set ACCESS_TOKENS="token1,token2" or legacy ACCESS_TOKEN.
+ACCESS_TOKENS = os.getenv("ACCESS_TOKENS")  # comma-separated
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")    # legacy single token
+
+# Build list of tokens to try
+TOKENS = []
+if ACCESS_TOKENS:
+    for t in ACCESS_TOKENS.split(","):
+        t = t.strip()
+        if t:
+            TOKENS.append(t)
+elif ACCESS_TOKEN:
+    TOKENS.append(ACCESS_TOKEN)
+# If TOKENS is empty, we will fall back to unauthenticated public repo listing (requires OWNER)
 
 REQUEST_TIMEOUT = 30
+# map repo_str -> token that discovered it
+repo_token_map = {}
 
-# files -> tentative mapping (kept for heuristics)
+# --- detection heuristics maps ---
 FILE_TOOL_MAP = {
     "package.json": ["nodejs"],
     "pyproject.toml": ["python"],
@@ -51,17 +68,15 @@ FILE_TOOL_MAP = {
     "Cargo.toml": ["rust"],
 }
 
-# package managers to exclude from badges
 PACKAGE_MANAGERS = {
     "npm", "yarn", "pip", "pipenv", "poetry", "composer", "cargo", "bundler", "gem"
 }
 
-# skills to forcibly exclude from final badges per user's request
+# skills to exclude
 FORBIDDEN_SKILLS = {
     "Jupyter Notebook", "Dockerfile", "CSS", "HTML", "Shell"
 }
 
-# DB keywords
 DB_KEYWORDS = {
     "postgres": "PostgreSQL",
     "postgresql": "PostgreSQL",
@@ -106,7 +121,6 @@ SERVICE_KEYWORDS = {
     "kafka": "Kafka",
 }
 
-# DevOps keywords: kept as fallback map; detection enhanced below
 DEVOPS_KEYWORDS = {
     "docker": "Docker",
     "kubernetes": "Kubernetes",
@@ -157,85 +171,121 @@ category_map = {
     "DevOps": Counter(),
 }
 
-def api_get(path, params=None):
+# --- helpers for API calls with optional token override ---
+def mk_headers(token=None):
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if token:
+        headers["Authorization"] = f"token {token}"
+    return headers
+
+def api_get(path, params=None, token=None):
     url = f"{GITHUB_API}{path}"
-    r = requests.get(url, headers=HEADERS, params=params, timeout=REQUEST_TIMEOUT)
+    headers = mk_headers(token=token)
+    r = requests.get(url, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
 
-def list_all_repos():
-    """
-    Return list of repos in 'owner/name' form.
-
-    Behavior:
-    - If REPO_LIST env is set, return that list (comma-separated).
-    - Else if an auth token is present, use /user/repos?visibility=all to list all repos
-      accessible by the token (including private). This covers user-owned repos and
-      repos the token has access to.
-    - Else fall back to /users/{OWNER}/repos which returns public repos only.
-    - In all cases, paginate through results and exclude forks.
-    """
-    if REPO_LIST:
-        return [r.strip() for r in REPO_LIST.split(",") if r.strip()]
-
+# --- list repos discovered by each token ---
+def list_repos_for_token(token):
     repos = []
     per_page = 100
     page = 1
-
-    if token:
-        # Use authenticated endpoint to include private repos accessible by the token
-        while True:
-            try:
-                data = api_get("/user/repos", params={"per_page": per_page, "page": page, "visibility": "all", "affiliation": "owner,collaborator,organization_member"})
-            except requests.HTTPError as e:
-                print("Error fetching /user/repos:", e)
-                break
-            if not data:
-                break
-            for r in data:
-                # filter out forks
-                if r.get("fork"):
-                    continue
-                repos.append(f"{r['owner']['login']}/{r['name']}")
-            if len(data) < per_page:
-                break
-            page += 1
-    else:
-        # No token: fall back to public repos for OWNER
-        page = 1
-        while True:
-            try:
-                data = api_get(f"/users/{OWNER}/repos", params={"per_page": per_page, "page": page, "type": "all"})
-            except requests.HTTPError as e:
-                print("Error fetching /users/{OWNER}/repos:", e)
-                break
-            if not data:
-                break
-            for r in data:
-                if r.get("fork"):
-                    continue
-                repos.append(f"{r['owner']['login']}/{r['name']}")
-            if len(data) < per_page:
-                break
-            page += 1
-
+    while True:
+        try:
+            data = api_get("/user/repos", params={"per_page": per_page, "page": page, "visibility": "all", "affiliation": "owner,collaborator,organization_member"}, token=token)
+        except requests.HTTPError as e:
+            print(f"Warning: failed to list /user/repos for a token: {e}")
+            break
+        if not data:
+            break
+        repos.extend(data)
+        if len(data) < per_page:
+            break
+        page += 1
+        # small sleep to be polite
+        time.sleep(0.05)
     return repos
 
+def list_public_user_repos(owner):
+    repos = []
+    per_page = 100
+    page = 1
+    while True:
+        try:
+            data = api_get(f"/users/{owner}/repos", params={"per_page": per_page, "page": page, "type": "all"})
+        except requests.HTTPError:
+            break
+        if not data:
+            break
+        repos.extend(data)
+        if len(data) < per_page:
+            break
+        page += 1
+    return repos
+
+def list_all_repos():
+    """
+    Return sorted list of 'owner/name' repo strings to analyze.
+    - If TOKENS provided: for each token, list /user/repos and add discovered repos (exclude forks).
+      Record repo_token_map[repo_str] = token (first token that discovered it).
+    - If no TOKENS and OWNER provided: fall back to public /users/{OWNER}/repos.
+    """
+    repo_set = set()
+    # if tokens given, gather per token
+    if TOKENS:
+        for token in TOKENS:
+            api_items = list_repos_for_token(token)
+            for r in api_items:
+                try:
+                    if r.get("fork"):
+                        continue
+                    repo_str = f"{r['owner']['login']}/{r['name']}"
+                    if repo_str not in repo_set:
+                        repo_set.add(repo_str)
+                        repo_token_map[repo_str] = token
+                except Exception:
+                    continue
+    else:
+        # fallback public listing if OWNER is set
+        if OWNER:
+            pubs = list_public_user_repos(OWNER)
+            for r in pubs:
+                try:
+                    if r.get("fork"):
+                        continue
+                    repo_str = f"{r['owner']['login']}/{r['name']}"
+                    if repo_str not in repo_set:
+                        repo_set.add(repo_str)
+                        repo_token_map[repo_str] = None
+                except Exception:
+                    continue
+    return sorted(repo_set)
+
+# --- repository file access helpers (use token that discovered repo when possible) ---
 def get_repo_default_branch(owner, repo):
-    data = api_get(f"/repos/{owner}/{repo}")
-    return data.get("default_branch", "main")
+    repo_str = f"{owner}/{repo}"
+    token = repo_token_map.get(repo_str)
+    try:
+        data = api_get(f"/repos/{owner}/{repo}", token=token)
+        return data.get("default_branch", "main")
+    except Exception:
+        return "main"
 
 def get_tree(owner, repo, branch):
+    repo_str = f"{owner}/{repo}"
+    token = repo_token_map.get(repo_str)
     try:
-        return api_get(f"/repos/{owner}/{repo}/git/trees/{branch}", params={"recursive": "1"})
-    except requests.HTTPError:
+        return api_get(f"/repos/{owner}/{repo}/git/trees/{branch}", params={"recursive": "1"}, token=token)
+    except Exception:
         return {"tree": []}
 
 def get_file_content(owner, repo, path):
+    repo_str = f"{owner}/{repo}"
+    token = repo_token_map.get(repo_str)
     try:
-        # use the contents API to fetch file (it returns base64 encoded content)
         r = requests.get(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{urllib.parse.quote(path, safe='')}",
-                         headers=HEADERS, timeout=REQUEST_TIMEOUT)
+                         headers=mk_headers(token=token),
+                         timeout=REQUEST_TIMEOUT)
         if r.status_code == 200:
             j = r.json()
             if j.get("encoding") == "base64" and "content" in j:
@@ -256,6 +306,7 @@ def scan_file_text_for_keywords(text, keywords_map):
             found.add(label)
     return found
 
+# --- detection per repo ---
 def detect_for_repo(full):
     owner, r = full.split("/", 1)
     branch = get_repo_default_branch(owner, r)
@@ -271,7 +322,9 @@ def detect_for_repo(full):
     }
     # languages via API
     try:
-        langs = api_get(f"/repos/{owner}/{r}/languages")
+        repo_str = f"/repos/{owner}/{r}/languages"
+        token = repo_token_map.get(f"{owner}/{r}")
+        langs = api_get(repo_str, token=token)
         for L in langs.keys():
             if L in LANGUAGE_NORMALIZE:
                 detected["languages"][LANGUAGE_NORMALIZE[L]] = langs[L]
@@ -281,7 +334,6 @@ def detect_for_repo(full):
         pass
 
     candidates_to_fetch = []
-    # expand candidates to include cloud and ops config filenames and common directories
     for p in paths:
         basename = os.path.basename(p).lower()
         if basename in FILE_TOOL_MAP:
@@ -297,16 +349,14 @@ def detect_for_repo(full):
         if basename in {"package.json", "requirements.txt", "pyproject.toml", "pom.xml", "go.mod", "composer.json", "Gemfile", "Cargo.toml"}:
             candidates_to_fetch.append(p)
 
-        # Cloud / CI / operations related filenames (added)
-        if any(key in basename for key in ("cloudformation", "cloudformation.json", "cloudformation.yml", "serverless.yml", "serverless.yaml",
-                                           "azure-pipelines.yml", "azure-pipelines.yaml", "cloudbuild.yaml", "cloudbuild.yml",
-                                           "sam.yaml", "sam.yml", "prometheus.yml", "prometheus.yaml", "grafana.ini",
-                                           "nginx.conf", "nginx.conf.default", "consul.hcl", "consul.json", "berksfile")):
+        # cloud/ops filenames
+        if any(key in basename for key in ("cloudformation", "serverless.yml", "serverless.yaml",
+                                           "azure-pipelines.yml", "cloudbuild.yaml",
+                                           "sam.yaml", "prometheus.yml", "grafana.ini",
+                                           "nginx.conf", "consul.hcl", "berksfile")):
             candidates_to_fetch.append(p)
-        # detect Chef cookbook dir or recipes files
         if "/recipes/" in p.lower() or basename == "metadata.rb" or basename == "berksfile":
             candidates_to_fetch.append(p)
-        # helm chart files
         if p.lower().endswith("chart.yaml") or "/charts/" in p.lower():
             candidates_to_fetch.append(p)
 
@@ -315,7 +365,7 @@ def detect_for_repo(full):
         txt = get_file_content(owner, r, path)
         if txt:
             content_blob += "\n" + txt.lower()
-        time.sleep(0.08)
+        time.sleep(0.06)
 
     # DB detection
     dbs_found = scan_file_text_for_keywords(content_blob, DB_KEYWORDS)
@@ -332,12 +382,12 @@ def detect_for_repo(full):
     for s in svc_found:
         detected["services"].add(s)
 
-    # DevOps detection via DEVOPS_KEYWORDS (fallback)
+    # DevOps detection via DEVOPS_KEYWORDS
     dev_found = scan_file_text_for_keywords(content_blob, DEVOPS_KEYWORDS)
     for d in dev_found:
         detected["devops"].add(d)
 
-    # Additional targeted cloud/ops pattern detection for better accuracy
+    # Additional patterns
     CLOUD_PATTERNS = {
         'provider "aws"': "AWS",
         'provider "google"': "GCP",
@@ -349,7 +399,6 @@ def detect_for_repo(full):
         "gcloud": "GCP",
         "google cloud": "GCP",
         "azurerm": "Azure",
-        "azure pipelines": "Azure",
         "azure-pipelines": "Azure",
     }
     OPS_PATTERNS = {
@@ -365,17 +414,14 @@ def detect_for_repo(full):
         "recipes/": "Chef",
     }
 
-    # search content for cloud patterns
     for k, name in CLOUD_PATTERNS.items():
         if k in content_blob:
             detected["devops"].add(name)
 
-    # search content for ops patterns
     for k, name in OPS_PATTERNS.items():
         if k in content_blob:
             detected["devops"].add(name)
 
-    # small heuristics for common mentions
     if "kubernetes" in content_blob or "k8s" in content_blob:
         detected["devops"].add("Kubernetes")
     if ".github/workflows" in "\n".join(paths) or "github actions" in content_blob:
@@ -395,7 +441,7 @@ def detect_for_repo(full):
     if "chef" in content_blob or "cookbook" in content_blob:
         detected["devops"].add("Chef")
 
-    # package.json dependency parsing (also check for devops keywords)
+    # package.json parsing
     if any(p.lower().endswith("package.json") for p in paths):
         raw = get_file_content(owner, r, "package.json")
         if raw:
@@ -418,7 +464,6 @@ def detect_for_repo(full):
                 dev_found2 = scan_file_text_for_keywords(dep_keys, DEVOPS_KEYWORDS)
                 for dv in dev_found2:
                     detected["devops"].add(dv)
-                # also cloud / ops patterns in dependency names
                 for k, name in CLOUD_PATTERNS.items():
                     if k in dep_keys:
                         detected["devops"].add(name)
@@ -430,17 +475,17 @@ def detect_for_repo(full):
 
     return detected
 
-# ---------------------------
-# Badge image inspection logic (unchanged in this snapshot)
-# ---------------------------
+# --- badge generation ---
 def badge_url_for(skill_name):
     label = urllib.parse.quote(f"-{skill_name}")
     logo = urllib.parse.quote(skill_name)
     return f"https://img.shields.io/badge/{label}-000?&logo={logo}"
 
-# ---------------------------
-# Main aggregation
-# ---------------------------
+def build_badge_md(skill_name):
+    url = badge_url_for(skill_name)
+    return f"![{skill_name}]({url})"
+
+# --- main aggregation & README write ---
 repos = list_all_repos()
 if not repos:
     print("No repos found; exiting.")
@@ -472,7 +517,6 @@ for full in repos:
     for dv in det.get("devops", []):
         aggregate["devops"][dv] += 1
 
-# map aggregates into categories (excluding package managers and forbidden skills)
 def add_skill(category, name):
     if name in PACKAGE_MANAGERS:
         return
@@ -494,11 +538,6 @@ for d, _ in aggregate["dbs"].most_common():
 
 for dv, _ in aggregate["devops"].most_common():
     add_skill("DevOps", dv)
-
-# Build markdown sections with badges (order: frequency desc)
-def build_badge_md(skill_name):
-    url = badge_url_for(skill_name)
-    return f"![{skill_name}]({url})"
 
 sections = []
 order_of_categories = [
@@ -523,13 +562,11 @@ for cat in order_of_categories:
     if badges:
         sections.append(f"### {cat}\n\n{' '.join(badges)}\n")
 
-# ---- prepend the requested section heading ----
 if not sections:
     new_section = "## 🛠️ My Skills\n\n_No detected skills._\n"
 else:
     new_section = "## 🛠️ My Skills\n\n" + "\n\n".join(sections)
 
-# Write into README between markers
 README_PATH = "README.md"
 START = "<!-- SKILLS-START -->"
 END = "<!-- SKILLS-END -->"
@@ -557,21 +594,17 @@ try:
     subprocess.run(["git", "config", "user.name", "github-actions"], check=True)
     subprocess.run(["git", "config", "user.email", "github-actions@users.noreply.github.com"], check=True)
 
-    # stage the README (only what we modified)
     subprocess.run(["git", "add", README_PATH], check=True)
-
-    # check if there is anything to commit
     status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True)
     if not status.stdout.strip():
         print("No changes to commit. Skipping commit and push.")
         sys.exit(0)
 
-    # commit & push if changes exist
-    subprocess.run(["git", "commit", "-m", "chore: update categorized My Skills badges (logo-checked) [skip ci]"], check=True)
+    subprocess.run(["git", "commit", "-m", "chore: update categorized My Skills badges [skip ci]"], check=True)
 
-    push_token = ACCESS_TOKEN or GITHUB_TOKEN
+    push_token = (TOKENS[0] if TOKENS else None) or os.getenv("GITHUB_TOKEN")
     if not push_token:
-        print("No token available to push changes. Please set ACCESS_TOKEN or rely on GITHUB_TOKEN.")
+        print("No token available to push changes. Please set ACCESS_TOKENS or ACCESS_TOKEN or GITHUB_TOKEN.")
         sys.exit(0)
 
     branch = os.getenv("GITHUB_REF_NAME") or "main"
@@ -580,7 +613,6 @@ try:
     subprocess.run(["git", "push", repo_url, f"HEAD:refs/heads/{branch}"], check=True)
     print("README updated and pushed successfully.")
 except subprocess.CalledProcessError as e:
-    # provide helpful log on failure
     print("Git error (commit/push):", e)
     try:
         subprocess.run(["git", "status"], check=False)
