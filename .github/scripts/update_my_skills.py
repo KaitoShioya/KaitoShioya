@@ -440,7 +440,7 @@ for dv, _ in aggregate["devops"].most_common():
 # Build markdown sections with badges (order: frequency desc)
 def build_badge_md(skill_name):
     url = badge_url_for(skill_name)
-    has = badge_has_logo(url)
+    has = True # badge_has_logo(url)
     if not has:
         return None
     return f"![{skill_name}]({url})"
