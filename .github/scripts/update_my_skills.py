@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 # .github/scripts/update_my_skills.py
 """
-Generates categorized skill badges and injects into README between markers:
-<!-- SKILLS-START --> and <!-- SKILLS-END -->
-
-Behavior:
-- Collect repos (from REPO_LIST or list user repos)
-- Detect languages/tools/services/databases via file-tree + file-content heuristics
-- Map detections into 6 categories:
-  Programming languages, Frontend development, Misc tools, Services & Frameworks, Databases, DevOps
-- Create shields.io badge URLs of the form:
-  https://img.shields.io/badge/-{skill name}-000?&logo={skill name}
-- Only include a badge if a HEAD request to that URL returns HTTP 200.
-- Exclude package managers from final badges.
+Updated script:
+- Categorized badges (Programming languages, Frontend development, Misc tools, Services & Frameworks, Databases, DevOps)
+- Badge existence determined by inspecting the *left half* of the retrieved shields image:
+    logo presence = left half contains pixels different from the background
+- Exclude: Jupyter Notebook, Dockerfile, CSS, HTML, Shell from badge output
+- Exclude forked repos from analysis
 """
 import os
 import requests
 import time
 import urllib.parse
-from collections import Counter, defaultdict
+from collections import Counter
+from io import BytesIO
+
+from PIL import Image
+import math
 
 GITHUB_API = "https://api.github.com"
 OWNER = os.getenv("OWNER")
@@ -36,61 +34,7 @@ HEADERS["Accept"] = "application/vnd.github.v3+json"
 
 REQUEST_TIMEOUT = 30
 
-# --- Utility functions for GitHub API ---
-def api_get(path, params=None):
-    url = f"{GITHUB_API}{path}"
-    r = requests.get(url, headers=HEADERS, params=params, timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    return r.json()
-
-def list_all_repos():
-    if REPO_LIST:
-        return [r.strip() for r in REPO_LIST.split(",") if r.strip()]
-    repos = []
-    page = 1
-    # try listing user repos first
-    while True:
-        try:
-            data = api_get(f"/users/{OWNER}/repos", params={"per_page": 100, "page": page, "type": "all"})
-        except requests.HTTPError:
-            break
-        if not data:
-            break
-        repos.extend([f"{r['owner']['login']}/{r['name']}" for r in data])
-        if len(data) < 100:
-            break
-        page += 1
-    return repos
-
-def get_repo_default_branch(owner, repo):
-    data = api_get(f"/repos/{owner}/{repo}")
-    return data.get("default_branch", "main")
-
-def get_tree(owner, repo, branch):
-    try:
-        return api_get(f"/repos/{owner}/{repo}/git/trees/{branch}", params={"recursive": "1"})
-    except requests.HTTPError:
-        return {"tree": []}
-
-def get_file_content(owner, repo, path):
-    # returns raw content (decoded) or None
-    try:
-        r = requests.get(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{urllib.parse.quote(path, safe='')}",
-                         headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        if r.status_code == 200:
-            j = r.json()
-            if j.get("encoding") == "base64" and "content" in j:
-                import base64
-                return base64.b64decode(j["content"]).decode("utf-8", errors="ignore")
-            else:
-                return j.get("content", "")
-        else:
-            return None
-    except Exception:
-        return None
-
-# --- Detection heuristics ---
-# files detection -> tentative tools
+# files -> tentative mapping (kept for heuristics)
 FILE_TOOL_MAP = {
     "package.json": ["nodejs"],
     "pyproject.toml": ["python"],
@@ -109,16 +53,19 @@ FILE_TOOL_MAP = {
     "vite.config.js": ["vite"],
     "webpack.config.js": ["webpack"],
     "Cargo.toml": ["rust"],
-    "pom.xml": ["maven"],
-    "terraform.tf": ["terraform"],
 }
 
-# package manager names to exclude from final badges
+# package managers to exclude from badges
 PACKAGE_MANAGERS = {
     "npm", "yarn", "pip", "pipenv", "poetry", "composer", "cargo", "bundler", "gem"
 }
 
-# DB keyword map: keyword -> normalized label
+# skills to forcibly exclude from final badges per your request
+FORBIDDEN_SKILLS = {
+    "Jupyter Notebook", "Dockerfile", "CSS", "HTML", "Shell"
+}
+
+# DB keywords
 DB_KEYWORDS = {
     "postgres": "PostgreSQL",
     "postgresql": "PostgreSQL",
@@ -136,11 +83,8 @@ DB_KEYWORDS = {
     "cockroach": "CockroachDB",
     "mssql": "SQL Server",
     "sqlserver": "SQL Server",
-    "azure-sqldb": "SQL Server",
-    # add others as needed
 }
 
-# Frontend frameworks
 FRONTEND_KEYWORDS = {
     "react": "React",
     "next": "Next.js",
@@ -153,24 +97,19 @@ FRONTEND_KEYWORDS = {
     "webpack": "Webpack",
 }
 
-# Services & frameworks (backend, libs)
 SERVICE_KEYWORDS = {
     "django": "Django",
     "flask": "Flask",
     "fastapi": "FastAPI",
     "express": "Express",
     "spring": "Spring",
-    "spring-boot": "Spring Boot",
     "laravel": "Laravel",
     "asp.net": "ASP.NET",
-    "gin": "Gin",
-    "grpc": "gRPC",
     "graphql": "GraphQL",
     "rabbitmq": "RabbitMQ",
     "kafka": "Kafka",
 }
 
-# DevOps / infra
 DEVOPS_KEYWORDS = {
     "docker": "Docker",
     "kubernetes": "Kubernetes",
@@ -185,7 +124,6 @@ DEVOPS_KEYWORDS = {
     "travis": "Travis CI",
 }
 
-# Programming languages mapping (GitHub languages usually suffice)
 LANGUAGE_NORMALIZE = {
     "JavaScript": "JavaScript",
     "TypeScript": "TypeScript",
@@ -200,9 +138,9 @@ LANGUAGE_NORMALIZE = {
     "Shell": "Shell",
     "HTML": "HTML",
     "CSS": "CSS",
+    "HTML": "HTML",
 }
 
-# category containers
 category_map = {
     "Programming languages": Counter(),
     "Frontend development": Counter(),
@@ -212,34 +150,60 @@ category_map = {
     "DevOps": Counter(),
 }
 
-# helper to add to category
-def add_skill(category, name):
-    if name in PACKAGE_MANAGERS:
-        return
-    category_map[category][name] += 1
+def api_get(path, params=None):
+    url = f"{GITHUB_API}{path}"
+    r = requests.get(url, headers=HEADERS, params=params, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
+    return r.json()
 
-# check shields image existence
-def badge_url_for(skill_name):
-    # use the raw skill name verbatim in label/logo param as requested
-    # but url encode accordingly
-    label = urllib.parse.quote(f"-{skill_name}")
-    logo = urllib.parse.quote(skill_name)
-    # black background text 000 and style default for-the-badge to be consistent
-    return f"https://img.shields.io/badge/{label}-000?&logo={logo}"
+def list_all_repos():
+    if REPO_LIST:
+        return [r.strip() for r in REPO_LIST.split(",") if r.strip()]
+    repos = []
+    page = 1
+    while True:
+        try:
+            data = api_get(f"/users/{OWNER}/repos", params={"per_page": 100, "page": page, "type": "all"})
+        except requests.HTTPError:
+            break
+        if not data:
+            break
+        # filter out forks here
+        for r in data:
+            if r.get("fork"):
+                continue
+            repos.append(f"{r['owner']['login']}/{r['name']}")
+        if len(data) < 100:
+            break
+        page += 1
+    return repos
 
-def badge_exists(url):
+def get_repo_default_branch(owner, repo):
+    data = api_get(f"/repos/{owner}/{repo}")
+    return data.get("default_branch", "main")
+
+def get_tree(owner, repo, branch):
     try:
-        # HEAD is lighter; some servers do not accept HEAD — fallback to GET with small timeout
-        r = requests.head(url, timeout=10)
-        if r.status_code == 200:
-            return True
-        # fallback
-        r = requests.get(url, timeout=10)
-        return r.status_code == 200
-    except Exception:
-        return False
+        return api_get(f"/repos/{owner}/{repo}/git/trees/{branch}", params={"recursive": "1"})
+    except requests.HTTPError:
+        return {"tree": []}
 
-# content scanning utilities
+def get_file_content(owner, repo, path):
+    try:
+        r = requests.get(f"{GITHUB_API}/repos/{owner}/{repo}/contents/{urllib.parse.quote(path, safe='')}",
+                         headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        if r.status_code == 200:
+            j = r.json()
+            if j.get("encoding") == "base64" and "content" in j:
+                import base64
+                return base64.b64decode(j["content"]).decode("utf-8", errors="ignore")
+            else:
+                return j.get("content", "")
+        else:
+            return None
+    except Exception:
+        return None
+
 def scan_file_text_for_keywords(text, keywords_map):
     found = set()
     txt = (text or "").lower()
@@ -272,83 +236,56 @@ def detect_for_repo(full):
     except Exception:
         pass
 
-    # filename-based heuristics + content scanning
-    # check for specific file names quickly
     candidates_to_fetch = []
     for p in paths:
         basename = os.path.basename(p).lower()
         if basename in FILE_TOOL_MAP:
-            for t in FILE_TOOL_MAP[basename]:
-                # map some to categories later
-                if t == "docker":
-                    detected["devops"].add("Docker")
-                elif t == "terraform":
-                    detected["devops"].add("Terraform")
-                elif t == "go":
-                    detected["languages"]["Go"] = detected["languages"].get("Go", 0)
-                # mark for further inspect
-            # but also fetch file to look at dependencies
             candidates_to_fetch.append(p)
-        # detect tf files
         if p.endswith(".tf"):
-            detected["devops"].add("Terraform")
             candidates_to_fetch.append(p)
         if p.endswith(".sql"):
             candidates_to_fetch.append(p)
         if "dockerfile" in basename:
-            detected["devops"].add("Docker")
             candidates_to_fetch.append(p)
-        # env files
         if basename in {".env", ".env.example", ".env.sample", "database.yml", "database.yaml", "application.yml", "config.yml"}:
             candidates_to_fetch.append(p)
-        # common package manifests to inspect dependencies
         if basename in {"package.json", "requirements.txt", "pyproject.toml", "pom.xml", "go.mod", "composer.json", "Gemfile", "Cargo.toml"}:
             candidates_to_fetch.append(p)
 
-    # fetch the candidate files and scan text
     content_blob = ""
     for path in set(candidates_to_fetch):
         txt = get_file_content(owner, r, path)
         if txt:
             content_blob += "\n" + txt.lower()
-        # short sleep to avoid rate-limit
-        time.sleep(0.1)
+        time.sleep(0.08)
 
-    # Database detection via keywords in files
     dbs_found = scan_file_text_for_keywords(content_blob, DB_KEYWORDS)
     for d in dbs_found:
         detected["dbs"].add(d)
 
-    # Frontend frameworks detection
     fe_found = scan_file_text_for_keywords(content_blob, FRONTEND_KEYWORDS)
     for f in fe_found:
         detected["frontend"].add(f)
 
-    # Services & frameworks detection
     svc_found = scan_file_text_for_keywords(content_blob, SERVICE_KEYWORDS)
     for s in svc_found:
         detected["services"].add(s)
 
-    # DevOps detection
     dev_found = scan_file_text_for_keywords(content_blob, DEVOPS_KEYWORDS)
     for d in dev_found:
         detected["devops"].add(d)
 
-    # Misc: detect some other tools (git, celery, redis client libs etc.)
-    misc_candidates = []
-    # search for 'redis' also put into db category if present (Redis can be a DB)
     if "redis" in content_blob:
         detected["dbs"].add("Redis")
     if "graphql" in content_blob:
         detected["services"].add("GraphQL")
     if "kubernetes" in content_blob or "k8s" in content_blob:
         detected["devops"].add("Kubernetes")
-    if "github actions" in content_blob or ".github/workflows" in "\n".join(paths):
+    if ".github/workflows" in "\n".join(paths) or "github actions" in content_blob:
         detected["devops"].add("GitHub Actions")
 
-    # fallback: often package.json lists dependencies like next/react/express
-    # attempt to parse package.json content if present (quick parse)
-    if "package.json" in (p.lower() for p in paths):
+    # package.json dependency parsing
+    if any(p.lower().endswith("package.json") for p in paths):
         raw = get_file_content(owner, r, "package.json")
         if raw:
             try:
@@ -358,14 +295,12 @@ def detect_for_repo(full):
                 deps.update(pj.get("dependencies", {}))
                 deps.update(pj.get("devDependencies", {}))
                 dep_keys = " ".join(deps.keys()).lower()
-                # scan keys
                 fe_found2 = scan_file_text_for_keywords(dep_keys, FRONTEND_KEYWORDS)
                 for f in fe_found2:
                     detected["frontend"].add(f)
                 svc_found2 = scan_file_text_for_keywords(dep_keys, SERVICE_KEYWORDS)
                 for s in svc_found2:
                     detected["services"].add(s)
-                # db libs
                 db_found2 = scan_file_text_for_keywords(dep_keys, DB_KEYWORDS)
                 for d in db_found2:
                     detected["dbs"].add(d)
@@ -374,7 +309,80 @@ def detect_for_repo(full):
 
     return detected
 
-# MAIN routine
+# ---------------------------
+# Badge image inspection logic
+# ---------------------------
+def badge_url_for(skill_name):
+    label = urllib.parse.quote(f"-{skill_name}")
+    logo = urllib.parse.quote(skill_name)
+    return f"https://img.shields.io/badge/{label}-000?&logo={logo}"
+
+def color_distance(c1, c2):
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(c1, c2)))
+
+def badge_has_logo(url):
+    """
+    Fetch image from URL and determine whether left half contains pixels different from background.
+    Heuristic:
+      - load image with PIL
+      - compute most common color of the whole image as background (mode)
+      - crop left half
+      - compute fraction of pixels in left half whose color distance to background > threshold_color (default 25)
+      - if fraction > threshold_fraction (default 0.005 = 0.5%) => logo present
+    Notes: thresholds may be tuned if false positives/negatives occur.
+    """
+    try:
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            return False
+        img = Image.open(BytesIO(r.content)).convert("RGBA")
+    except Exception:
+        return False
+
+    w, h = img.size
+    if w == 0 or h == 0:
+        return False
+    left = img.crop((0, 0, w // 2, h))
+
+    # downsample left region to speed up and reduce noise
+    small = left.resize((max(1, w//10), max(1, h//10)))
+    pixels = small.getdata()
+
+    # compute background color as most common opaque pixel (ignore fully transparent)
+    counts = {}
+    for px in pixels:
+        if px[3] == 0:
+            continue
+        rgb = px[:3]
+        counts[rgb] = counts.get(rgb, 0) + 1
+    if not counts:
+        return False
+    background = max(counts.items(), key=lambda x: x[1])[0]
+
+    # thresholds (tunable)
+    threshold_color = 25.0        # color distance threshold
+    threshold_fraction = 0.005   # fraction of pixels in left half that must differ from background
+
+    total_pixels = 0
+    diff_pixels = 0
+    for px in pixels:
+        if px[3] == 0:
+            continue
+        total_pixels += 1
+        rgb = px[:3]
+        if color_distance(rgb, background) > threshold_color:
+            diff_pixels += 1
+
+    if total_pixels == 0:
+        return False
+    frac = diff_pixels / total_pixels
+    # debug: print info if needed
+    # print("badge_has_logo:", url, "bg", background, "frac", frac, "diff", diff_pixels, "total", total_pixels)
+    return frac >= threshold_fraction
+
+# ---------------------------
+# Main aggregation
+# ---------------------------
 repos = list_all_repos()
 if not repos:
     print("No repos found; exiting.")
@@ -389,14 +397,12 @@ aggregate = {
     "misc": Counter(),
 }
 
-# iterate repos and accumulate detections
 for full in repos:
     try:
         det = detect_for_repo(full)
     except Exception as e:
         print(f"Error detecting {full}: {e}")
         continue
-    # languages
     for lang in det.get("languages", {}).keys():
         aggregate["languages"][lang] += 1
     for f in det.get("frontend", []):
@@ -407,39 +413,37 @@ for full in repos:
         aggregate["dbs"][d] += 1
     for dv in det.get("devops", []):
         aggregate["devops"][dv] += 1
-    # misc can be augmented later
 
-# map aggregates into categories and filter out package managers
-for lang, cnt in aggregate["languages"].most_common():
-    if lang.lower() in PACKAGE_MANAGERS:
-        continue
+# map aggregates into categories (excluding package managers and forbidden skills)
+def add_skill(category, name):
+    if name in PACKAGE_MANAGERS:
+        return
+    if name in FORBIDDEN_SKILLS:
+        return
+    category_map[category][name] += 1
+
+for lang, _ in aggregate["languages"].most_common():
     add_skill("Programming languages", lang)
 
-# Frontend
-for f, cnt in aggregate["frontend"].most_common():
+for f, _ in aggregate["frontend"].most_common():
     add_skill("Frontend development", f)
 
-# Services & Frameworks
-for s, cnt in aggregate["services"].most_common():
+for s, _ in aggregate["services"].most_common():
     add_skill("Services & Frameworks", s)
 
-# Databases (use normalized names)
-for d, cnt in aggregate["dbs"].most_common():
+for d, _ in aggregate["dbs"].most_common():
     add_skill("Databases", d)
 
-# DevOps
-for dv, cnt in aggregate["devops"].most_common():
+for dv, _ in aggregate["devops"].most_common():
     add_skill("DevOps", dv)
 
-# Misc tools: include detections not categorized (for now, empty or future extension)
-# (We intentionally exclude package managers)
-# Build final markdown with headings (###) and badges
+# Build markdown sections with badges (order: frequency desc)
 def build_badge_md(skill_name):
     url = badge_url_for(skill_name)
-    if badge_exists(url):
-        return f"![{skill_name}]({url})"
-    else:
+    has = badge_has_logo(url)
+    if not has:
         return None
+    return f"![{skill_name}]({url})"
 
 sections = []
 order_of_categories = [
@@ -455,7 +459,6 @@ for cat in order_of_categories:
     counter = category_map[cat]
     if not counter:
         continue
-    # sort by frequency desc
     items = [k for k, _ in counter.most_common()]
     badges = []
     for it in items:
@@ -470,7 +473,7 @@ if not sections:
 else:
     new_section = "\n\n".join(sections)
 
-# Insert into README
+# Write into README between markers
 README_PATH = "README.md"
 START = "<!-- SKILLS-START -->"
 END = "<!-- SKILLS-END -->"
@@ -497,12 +500,11 @@ try:
     subprocess.run(["git", "config", "user.name", "github-actions"], check=True)
     subprocess.run(["git", "config", "user.email", "github-actions@users.noreply.github.com"], check=True)
     subprocess.run(["git", "add", README_PATH], check=True)
-    subprocess.run(["git", "commit", "-m", "chore: update categorized My Skills badges [skip ci]"], check=True)
+    subprocess.run(["git", "commit", "-m", "chore: update categorized My Skills badges (logo-checked) [skip ci]"], check=True)
     push_token = ACCESS_TOKEN or GITHUB_TOKEN
     if not push_token:
         print("No token available to push changes. Please set ACCESS_TOKEN or rely on GITHUB_TOKEN.")
         sys.exit(0)
-    # Determine branch to push to: prefer current branch env var, fallback to default 'main'
     branch = os.getenv("GITHUB_REF_NAME") or "main"
     repo_url = f"https://{push_token}@github.com/{OWNER}/{REPO}.git"
     subprocess.run(["git", "push", repo_url, f"HEAD:refs/heads/{branch}"], check=True)
