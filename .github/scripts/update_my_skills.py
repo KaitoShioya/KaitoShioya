@@ -41,7 +41,6 @@ if ACCESS_TOKENS:
             TOKENS.append(t)
 elif ACCESS_TOKEN:
     TOKENS.append(ACCESS_TOKEN)
-print(TOKENS)
 # If TOKENS is empty, we will fall back to unauthenticated public repo listing (requires OWNER)
 
 REQUEST_TIMEOUT = 30
