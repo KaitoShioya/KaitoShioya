@@ -35,6 +35,7 @@ ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")    # legacy single token
 # Build list of tokens to try
 TOKENS = []
 if ACCESS_TOKENS:
+    print("Loading ACCESS_TOKEN list")
     for t in ACCESS_TOKENS.split(","):
         t = t.strip()
         if t:
