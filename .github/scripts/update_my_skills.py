@@ -6,7 +6,8 @@ discoverable by a list of personal access tokens.
 
 Modifications:
 - Add "Data Science & AI" category.
-- Detect Data Science libraries only by parsing .py source imports (strong signal).
+- Detect Data Science libraries only by parsing .py source imports AND
+  confirming actual usage in code (strong signal).
   - Libraries: NumPy, Pandas, Scikit-learn, PyTorch, TensorFlow, Hydra, WandB, Optuna, HuggingFace, etc.
   - Do NOT use requirements.txt / pyproject.toml for DS detection.
 - Exclude HCL and VBA from Programming languages output.
@@ -159,7 +160,7 @@ LANGUAGE_NORMALIZE = {
 }
 
 # Data Science & AI keywords mapping (package name -> normalized label)
-# NOTE: detection for these will rely ONLY on .py import scanning (strong signal).
+# NOTE: detection for these will rely ONLY on .py import scanning AND usage check (strong signal).
 DS_LIB_KEYWORDS = {
     "numpy": "NumPy",
     "pandas": "Pandas",
@@ -331,29 +332,58 @@ def scan_file_text_for_keywords(text, keywords_map):
             found.add(label)
     return found
 
-# --- new: extract imports from .py files (strong signal for DS/AI detection) ---
-_import_re = re.compile(r'^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import|import\s+([A-Za-z0-9_\.]+))', re.MULTILINE)
-def extract_imports_from_py(text):
-    """
-    Return set of top-level module names imported in a .py file (lowercased).
-    Examples matched:
-      import numpy as np
-      import sklearn.preprocessing
-      from torch import nn
-      from transformers import AutoModel
-    """
-    found = set()
-    if not text:
-        return found
-    for m in _import_re.finditer(text):
-        mod = m.group(1) or m.group(2)
-        if not mod:
-            continue
-        base = mod.split('.')[0].lower()
-        found.add(base)
-    return found
+# --- new: extract imports and aliases from .py files (strong signal for DS/AI detection) ---
+# regexes to capture import statements with optional alias and from-imports
+_import_re = re.compile(r'^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import\s+(.+)|import\s+(.+))', re.MULTILINE)
+# this will parse lines like:
+#   import numpy as np, pandas as pd
+#   import numpy
+#   from sklearn.preprocessing import StandardScaler, MinMaxScaler as MMS
 
-# --- detection per repo (modified to perform .py import scanning for DS only) ---
+def parse_imports_from_py(text):
+    """
+    Returns two dicts:
+      imports_map: base_module -> set(alias or base_module)
+      from_imports_map: base_module -> set(symbol names imported)
+    All keys and values are lowercased.
+    """
+    imports_map = {}
+    from_imports_map = {}
+    if not text:
+        return imports_map, from_imports_map
+
+    for m in _import_re.finditer(text):
+        from_mod = m.group(1)
+        from_rest = m.group(2)
+        import_rest = m.group(3)
+
+        if from_mod:
+            base = from_mod.split('.')[0].lower()
+            # split symbols by comma
+            symbols = [s.strip() for s in re.split(r',\s*', from_rest)]
+            for sym in symbols:
+                # handle alias: "symbol as alias"
+                parts = [p.strip() for p in re.split(r'\s+as\s+', sym, flags=re.IGNORECASE)]
+                sym_name = parts[0].lower()
+                alias = parts[1].lower() if len(parts) > 1 else sym_name
+                from_imports_map.setdefault(base, set()).add(sym_name)
+                # Note: we do not add alias to imports_map for from-imports; usage detection will check symbol usage.
+        elif import_rest:
+            # handle multiple imports separated by comma
+            parts = [p.strip() for p in re.split(r',\s*', import_rest)]
+            for part in parts:
+                subparts = [p.strip() for p in re.split(r'\s+as\s+', part, flags=re.IGNORECASE)]
+                mod = subparts[0]
+                alias = subparts[1] if len(subparts) > 1 else None
+                base = mod.split('.')[0].lower()
+                if alias:
+                    alias = alias.lower()
+                    imports_map.setdefault(base, set()).add(alias)
+                else:
+                    imports_map.setdefault(base, set()).add(base)
+    return imports_map, from_imports_map
+
+# --- detection per repo (modified to perform .py import+usage scanning for DS only) ---
 def detect_for_repo(full):
     owner, r = full.split("/", 1)
     branch = get_repo_default_branch(owner, r)
@@ -365,10 +395,10 @@ def detect_for_repo(full):
         "services": set(),
         "dbs": set(),
         "devops": set(),
-        "datasci": set(),   # collects detected DS libs via .py imports
+        "datasci": set(),   # collects detected DS libs via .py import+usage
         "misc": set(),
     }
-    # languages via API
+    # languages via API (unchanged)
     try:
         repo_str = f"/repos/{owner}/{r}/languages"
         token = repo_token_map.get(f"{owner}/{r}")
@@ -381,7 +411,7 @@ def detect_for_repo(full):
     except Exception:
         pass
 
-    # Collect candidate files similar to before, but ensure we also fetch .py files for DS import scanning
+    # Collect candidate files similar to before, but ensure we also fetch .py files for DS import+usage scanning
     candidates_to_fetch = []
     for p in paths:
         basename = os.path.basename(p).lower()
@@ -409,12 +439,19 @@ def detect_for_repo(full):
         if p.lower().endswith("chart.yaml") or "/charts/" in p.lower():
             candidates_to_fetch.append(p)
 
-        # **CRUCIAL**: include .py files for DS import scanning (only .py, not notebooks)
+        # **CRUCIAL**: include .py files for DS import+usage scanning (only .py, not notebooks)
         if p.lower().endswith(".py"):
             candidates_to_fetch.append(p)
 
     content_blob = ""
-    code_imports = set()
+    # For DS detection we need:
+    #  - imports_map_all: base_module -> set(aliases across files)
+    #  - from_imports_map_all: base_module -> set(symbols imported across files)
+    #  - file_texts: list of (path, text) for usage scanning
+    imports_map_all = {}
+    from_imports_map_all = {}
+    file_texts = []  # list of strings
+
     for path in sorted(set(candidates_to_fetch)):
         txt = get_file_content(owner, r, path)
         if not txt:
@@ -424,28 +461,37 @@ def detect_for_repo(full):
         # only extract imports from .py files (strong signal)
         if lpath.endswith(".py"):
             try:
-                imports = extract_imports_from_py(txt)
-                code_imports.update(imports)
+                imap, fmap = parse_imports_from_py(txt)
+                # merge into global maps
+                for k, v in imap.items():
+                    imports_map_all.setdefault(k, set()).update(v)
+                for k, v in fmap.items():
+                    from_imports_map_all.setdefault(k, set()).update(v)
+                file_texts.append(txt)
             except Exception:
-                pass
+                # if parsing fails, still add the file text for weaker scans
+                file_texts.append(txt)
+        else:
+            # other files added for general keyword scanning only
+            pass
         time.sleep(0.06)
 
-    # DB detection
+    # DB detection (unchanged)
     dbs_found = scan_file_text_for_keywords(content_blob, DB_KEYWORDS)
     for d in dbs_found:
         detected["dbs"].add(d)
 
-    # Frontend detection
+    # Frontend detection (unchanged)
     fe_found = scan_file_text_for_keywords(content_blob, FRONTEND_KEYWORDS)
     for f in fe_found:
         detected["frontend"].add(f)
 
-    # Service/framework detection
+    # Service/framework detection (unchanged)
     svc_found = scan_file_text_for_keywords(content_blob, SERVICE_KEYWORDS)
     for s in svc_found:
         detected["services"].add(s)
 
-    # DevOps detection via DEVOPS_KEYWORDS
+    # DevOps detection via DEVOPS_KEYWORDS (unchanged)
     dev_found = scan_file_text_for_keywords(content_blob, DEVOPS_KEYWORDS)
     for d in dev_found:
         detected["devops"].add(d)
@@ -504,14 +550,48 @@ def detect_for_repo(full):
     if "chef" in content_blob or "cookbook" in content_blob:
         detected["devops"].add("Chef")
 
-    # --- Data Science & AI detection (STRONG: only from .py imports) ---
-    # code_imports contains top-level module names imported in .py files
-    for imp in code_imports:
-        if imp in DS_LIB_KEYWORDS:
-            detected["datasci"].add(DS_LIB_KEYWORDS[imp])
-    # Note: we intentionally do NOT consider requirements.txt or pyproject.toml for DS detection.
+    # --- Data Science & AI detection (STRONG: require import AND actual usage) ---
+    # For each DS library key, check:
+    #  - if it was imported (imports_map_all contains base or from_imports_map_all contains base)
+    #  - AND at least one usage pattern exists in the collected .py file texts.
+    # Usage patterns:
+    #   - for import alias/module: r'\b(alias|module)\s*\.'
+    #   - for from-imported symbols: r'\b(symbol)\s*\(' or r'\b(symbol)\s*\.'
+    for ds_key, ds_label in DS_LIB_KEYWORDS.items():
+        base = ds_key.lower()
+        used = False
 
-    # package.json parsing (unchanged, but does not affect DS detection)
+        # 1) alias/module import usage
+        aliases = imports_map_all.get(base, set())
+        if aliases:
+            # check each file text for alias. or module. usage
+            for txt in file_texts:
+                txt_search = txt
+                for alias in aliases:
+                    # look for alias. (attribute access) -> strong indicator of actual usage
+                    if re.search(r'\b' + re.escape(alias) + r'\s*\.', txt_search):
+                        used = True
+                        break
+                if used:
+                    break
+
+        # 2) from-import usage (if someone did: from numpy import array)
+        if not used:
+            symbols = from_imports_map_all.get(base, set())
+            if symbols:
+                for txt in file_texts:
+                    for sym in symbols:
+                        # symbol( or symbol. usage
+                        if re.search(r'\b' + re.escape(sym) + r'\s*\(', txt) or re.search(r'\b' + re.escape(sym) + r'\s*\.', txt):
+                            used = True
+                            break
+                    if used:
+                        break
+
+        if used:
+            detected["datasci"].add(ds_label)
+
+    # package.json parsing (unchanged, note: does not affect DS detection per request)
     if any(p.lower().endswith("package.json") for p in paths):
         raw = get_file_content(owner, r, "package.json")
         if raw:
