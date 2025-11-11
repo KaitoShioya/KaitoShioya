@@ -1,0 +1,40 @@
+name: Update Profile My Skills
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 0' # 毎週日曜 03:00 UTC（必要なら変更）
+
+permissions:
+  contents: write   # README を更新するため
+  # NOTE: GITHUB_TOKEN は実行中リポジトリに対しては private でも使えるが
+  # 他リポジトリを横断する場合は下記の ACCESS_TOKEN を使います.
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout profile repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests PyYAML
+
+      - name: Run skill extractor and update README
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}        # optional; required to read other private repos
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          REPO_LIST: ${{ secrets.REPO_LIST }}              # optional: "owner1/repo1,owner2/repo2"
+        run: |
+          python .github/scripts/update_my_skills.py

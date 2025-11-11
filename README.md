@@ -1,4 +1,12 @@
-## Hi there 👋
+# Hi there 👋, I'm KaitoShioya
+
+## ✨ About Me
+
+- 👨‍🎓 I'm a first-year master's student at [Graduate School of Engineering Sciences](https://www.tj.kyushu-u.ac.jp/) at [Kyushu University](https://www.kyushu-u.ac.jp/) .
+
+- 🧑‍💻 I'm interested in analysing cryptocurrency and stock trading data.
+
+- 🌱 I am currently learning `Computer Science` and `Software Engineering`.
 
 <!--
 **KaitoShioya/KaitoShioya** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
