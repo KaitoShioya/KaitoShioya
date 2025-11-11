@@ -4,44 +4,52 @@
 Generate categorized skill badges for README from all repositories
 discoverable by a list of personal access tokens.
 
-Modifications:
-- Add "Data Science & AI" category.
-- Detect Data Science libraries only by parsing .py source imports AND
-  confirming actual usage in code (strong signal).
-  - Libraries: NumPy, Pandas, Scikit-learn, PyTorch, TensorFlow, Hydra, WandB, Optuna, HuggingFace, etc.
-  - Do NOT use requirements.txt / pyproject.toml for DS detection.
-- Exclude HCL and VBA from Programming languages output.
-Other behavior unchanged.
+Behavior:
+- Read ACCESS_TOKENS (comma-separated) or single ACCESS_TOKEN (backward-compatible).
+- For each token, call /user/repos?visibility=all and collect repos (exclude forks).
+- Deduplicate repos across tokens. Record which token discovered each repo in repo_token_map.
+- For each repo, use the token that discovered it when calling repo APIs / file contents.
+- Detect languages / frontend / services / databases / devops via heuristics.
+- Build README section between <!-- SKILLS-START --> and <!-- SKILLS-END --> with heading
+  "## 🛠️ My Skills" and categorized badges (Programming languages, Frontend development,
+  Misc tools, Services & Frameworks, Databases, DevOps).
+- Exclude package managers and forbidden skills from badges.
+- Safe commit: only commit & push when README changed; otherwise skip commit.
 """
+
 import os
+import re
 import requests
 import time
 import urllib.parse
-import re
-import json
 from collections import Counter
 
 GITHUB_API = "https://api.github.com"
 OWNER = os.getenv("OWNER")
 REPO = os.getenv("REPO")
 
-# Tokens handling (unchanged)
+# Multiple token support:
+# Either set ACCESS_TOKENS="token1,token2" or legacy ACCESS_TOKEN.
 ACCESS_TOKENS = os.getenv("ACCESS_TOKENS")  # comma-separated
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")    # legacy single token
 
+# Build list of tokens to try
 TOKENS = []
 if ACCESS_TOKENS:
+    print("Loading ACCESS_TOKEN list")
     for t in ACCESS_TOKENS.split(","):
         t = t.strip()
         if t:
             TOKENS.append(t)
 elif ACCESS_TOKEN:
     TOKENS.append(ACCESS_TOKEN)
+# If TOKENS is empty, we will fall back to unauthenticated public repo listing (requires OWNER)
 
 REQUEST_TIMEOUT = 30
+# map repo_str -> token that discovered it
 repo_token_map = {}
 
-# --- detection heuristics maps (unchanged mostly) ---
+# --- detection heuristics maps ---
 FILE_TOOL_MAP = {
     "package.json": ["nodejs"],
     "pyproject.toml": ["python"],
@@ -140,7 +148,6 @@ DEVOPS_KEYWORDS = {
     "consul": "Consul",
 }
 
-# LANGUAGE_NORMALIZE kept; HCL/VBA still present in normalize but will be excluded from output later
 LANGUAGE_NORMALIZE = {
     "JavaScript": "JavaScript",
     "TypeScript": "TypeScript",
@@ -155,12 +162,8 @@ LANGUAGE_NORMALIZE = {
     "Shell": "Shell",
     "HTML": "HTML",
     "CSS": "CSS",
-    "HCL": "HCL",
-    "VBA": "VBA",
 }
 
-# Data Science & AI keywords mapping (package name -> normalized label)
-# NOTE: detection for these will rely ONLY on .py import scanning AND usage check (strong signal).
 DS_LIB_KEYWORDS = {
     "numpy": "NumPy",
     "pandas": "Pandas",
@@ -190,7 +193,7 @@ DS_LIB_KEYWORDS = {
 category_map = {
     "Programming languages": Counter(),
     "Frontend development": Counter(),
-    "Data Science & AI": Counter(),   # NEW category
+    "Data Science & AI": Counter(),
     "Misc tools": Counter(),
     "Services & Frameworks": Counter(),
     "Databases": Counter(),
@@ -211,7 +214,7 @@ def api_get(path, params=None, token=None):
     r.raise_for_status()
     return r.json()
 
-# --- list repos discovered by each token (unchanged) ---
+# --- list repos discovered by each token ---
 def list_repos_for_token(token):
     repos = []
     per_page = 100
@@ -332,13 +335,7 @@ def scan_file_text_for_keywords(text, keywords_map):
             found.add(label)
     return found
 
-# --- new: extract imports and aliases from .py files (strong signal for DS/AI detection) ---
-# regexes to capture import statements with optional alias and from-imports
 _import_re = re.compile(r'^\s*(?:from\s+([A-Za-z0-9_\.]+)\s+import\s+(.+)|import\s+(.+))', re.MULTILINE)
-# this will parse lines like:
-#   import numpy as np, pandas as pd
-#   import numpy
-#   from sklearn.preprocessing import StandardScaler, MinMaxScaler as MMS
 
 def parse_imports_from_py(text):
     """
@@ -383,7 +380,7 @@ def parse_imports_from_py(text):
                     imports_map.setdefault(base, set()).add(base)
     return imports_map, from_imports_map
 
-# --- detection per repo (modified to perform .py import+usage scanning for DS only) ---
+# --- detection per repo ---
 def detect_for_repo(full):
     owner, r = full.split("/", 1)
     branch = get_repo_default_branch(owner, r)
@@ -395,10 +392,10 @@ def detect_for_repo(full):
         "services": set(),
         "dbs": set(),
         "devops": set(),
-        "datasci": set(),   # collects detected DS libs via .py import+usage
+        "datasci": set(),
         "misc": set(),
     }
-    # languages via API (unchanged)
+    # languages via API
     try:
         repo_str = f"/repos/{owner}/{r}/languages"
         token = repo_token_map.get(f"{owner}/{r}")
@@ -411,7 +408,6 @@ def detect_for_repo(full):
     except Exception:
         pass
 
-    # Collect candidate files similar to before, but ensure we also fetch .py files for DS import+usage scanning
     candidates_to_fetch = []
     for p in paths:
         basename = os.path.basename(p).lower()
@@ -438,26 +434,22 @@ def detect_for_repo(full):
             candidates_to_fetch.append(p)
         if p.lower().endswith("chart.yaml") or "/charts/" in p.lower():
             candidates_to_fetch.append(p)
-
-        # **CRUCIAL**: include .py files for DS import+usage scanning (only .py, not notebooks)
         if p.lower().endswith(".py"):
             candidates_to_fetch.append(p)
 
     content_blob = ""
-    # For DS detection we need:
-    #  - imports_map_all: base_module -> set(aliases across files)
-    #  - from_imports_map_all: base_module -> set(symbols imported across files)
-    #  - file_texts: list of (path, text) for usage scanning
+
     imports_map_all = {}
     from_imports_map_all = {}
     file_texts = []  # list of strings
 
     for path in sorted(set(candidates_to_fetch)):
         txt = get_file_content(owner, r, path)
-        if not txt:
+        if txt:
+            content_blob += "\n" + txt.lower()
+        else:
             continue
         lpath = path.lower()
-        content_blob += "\n" + txt.lower()
         # only extract imports from .py files (strong signal)
         if lpath.endswith(".py"):
             try:
@@ -476,27 +468,27 @@ def detect_for_repo(full):
             pass
         time.sleep(0.06)
 
-    # DB detection (unchanged)
+    # DB detection
     dbs_found = scan_file_text_for_keywords(content_blob, DB_KEYWORDS)
     for d in dbs_found:
         detected["dbs"].add(d)
 
-    # Frontend detection (unchanged)
+    # Frontend detection
     fe_found = scan_file_text_for_keywords(content_blob, FRONTEND_KEYWORDS)
     for f in fe_found:
         detected["frontend"].add(f)
 
-    # Service/framework detection (unchanged)
+    # Service/framework detection
     svc_found = scan_file_text_for_keywords(content_blob, SERVICE_KEYWORDS)
     for s in svc_found:
         detected["services"].add(s)
 
-    # DevOps detection via DEVOPS_KEYWORDS (unchanged)
+    # DevOps detection via DEVOPS_KEYWORDS
     dev_found = scan_file_text_for_keywords(content_blob, DEVOPS_KEYWORDS)
     for d in dev_found:
         detected["devops"].add(d)
 
-    # Additional patterns (unchanged)
+    # Additional patterns
     CLOUD_PATTERNS = {
         'provider "aws"': "AWS",
         'provider "google"': "GCP",
@@ -550,13 +542,6 @@ def detect_for_repo(full):
     if "chef" in content_blob or "cookbook" in content_blob:
         detected["devops"].add("Chef")
 
-    # --- Data Science & AI detection (STRONG: require import AND actual usage) ---
-    # For each DS library key, check:
-    #  - if it was imported (imports_map_all contains base or from_imports_map_all contains base)
-    #  - AND at least one usage pattern exists in the collected .py file texts.
-    # Usage patterns:
-    #   - for import alias/module: r'\b(alias|module)\s*\.'
-    #   - for from-imported symbols: r'\b(symbol)\s*\(' or r'\b(symbol)\s*\.'
     for ds_key, ds_label in DS_LIB_KEYWORDS.items():
         base = ds_key.lower()
         used = False
@@ -591,11 +576,12 @@ def detect_for_repo(full):
         if used:
             detected["datasci"].add(ds_label)
 
-    # package.json parsing (unchanged, note: does not affect DS detection per request)
+    # package.json parsing
     if any(p.lower().endswith("package.json") for p in paths):
         raw = get_file_content(owner, r, "package.json")
         if raw:
             try:
+                import json
                 pj = json.loads(raw)
                 deps = {}
                 deps.update(pj.get("dependencies", {}))
@@ -624,7 +610,7 @@ def detect_for_repo(full):
 
     return detected
 
-# --- badge generation (unchanged) ---
+# --- badge generation ---
 def badge_url_for(skill_name):
     label = urllib.parse.quote(f"-{skill_name}")
     logo = urllib.parse.quote(skill_name)
@@ -634,7 +620,7 @@ def build_badge_md(skill_name):
     url = badge_url_for(skill_name)
     return f"![{skill_name}]({url})"
 
-# --- main aggregation & README write (mostly unchanged) ---
+# --- main aggregation & README write ---
 repos = list_all_repos()
 if not repos:
     print("No repos found; exiting.")
@@ -674,7 +660,6 @@ def add_skill(category, name):
         return
     if name in FORBIDDEN_SKILLS:
         return
-    # exclude HCL and VBA from Programming languages output
     if category == "Programming languages" and name in ("HCL", "VBA"):
         return
     category_map[category][name] += 1
@@ -709,7 +694,7 @@ order_of_categories = [
 ]
 
 for cat in order_of_categories:
-    counter = category_map.get(cat, Counter())
+    counter = category_map[cat]
     if not counter:
         continue
     items = [k for k, _ in counter.most_common()]
