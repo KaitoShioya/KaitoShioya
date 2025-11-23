@@ -34,7 +34,7 @@ Here are some ideas to get you started:
 
 ### Frontend development
 
-![React](https://img.shields.io/badge/-React-000?&logo=React) ![Next.js](https://img.shields.io/badge/-Next.js-000?&logo=Next.js)
+![Next.js](https://img.shields.io/badge/-Next.js-000?&logo=Next.js) ![React](https://img.shields.io/badge/-React-000?&logo=React)
 
 
 ### Services & Frameworks
@@ -49,6 +49,6 @@ Here are some ideas to get you started:
 
 ### DevOps
 
-![GitHub Actions](https://img.shields.io/badge/-GitHub%20Actions-000?&logo=GitHub%20Actions) ![Docker](https://img.shields.io/badge/-Docker-000?&logo=Docker) ![AWS](https://img.shields.io/badge/-AWS-000?&logo=AWS) ![Terraform](https://img.shields.io/badge/-Terraform-000?&logo=Terraform) ![GCP](https://img.shields.io/badge/-GCP-000?&logo=GCP)
+![GitHub Actions](https://img.shields.io/badge/-GitHub%20Actions-000?&logo=GitHub%20Actions) ![Docker](https://img.shields.io/badge/-Docker-000?&logo=Docker) ![GCP](https://img.shields.io/badge/-GCP-000?&logo=GCP) ![Terraform](https://img.shields.io/badge/-Terraform-000?&logo=Terraform) ![AWS](https://img.shields.io/badge/-AWS-000?&logo=AWS)
 
 <!-- SKILLS-END -->
