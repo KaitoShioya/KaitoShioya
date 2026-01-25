@@ -49,6 +49,6 @@ Here are some ideas to get you started:
 
 ### DevOps
 
-![GitHub Actions](https://img.shields.io/badge/-GitHub%20Actions-000?&logo=GitHub%20Actions) ![Docker](https://img.shields.io/badge/-Docker-000?&logo=Docker) ![Terraform](https://img.shields.io/badge/-Terraform-000?&logo=Terraform) ![GCP](https://img.shields.io/badge/-GCP-000?&logo=GCP) ![AWS](https://img.shields.io/badge/-AWS-000?&logo=AWS)
+![GitHub Actions](https://img.shields.io/badge/-GitHub%20Actions-000?&logo=GitHub%20Actions) ![Docker](https://img.shields.io/badge/-Docker-000?&logo=Docker) ![AWS](https://img.shields.io/badge/-AWS-000?&logo=AWS) ![GCP](https://img.shields.io/badge/-GCP-000?&logo=GCP) ![Terraform](https://img.shields.io/badge/-Terraform-000?&logo=Terraform)
 
 <!-- SKILLS-END -->
