@@ -29,12 +29,12 @@ Here are some ideas to get you started:
 
 ### Programming languages
 
-![Python](https://img.shields.io/badge/-Python-000?&logo=Python) ![HCL](https://img.shields.io/badge/-HCL-000?&logo=HCL) ![Makefile](https://img.shields.io/badge/-Makefile-000?&logo=Makefile) ![TypeScript](https://img.shields.io/badge/-TypeScript-000?&logo=TypeScript) ![JavaScript](https://img.shields.io/badge/-JavaScript-000?&logo=JavaScript) ![C](https://img.shields.io/badge/-C-000?&logo=C) ![VBA](https://img.shields.io/badge/-VBA-000?&logo=VBA) ![Visual Basic 6.0](https://img.shields.io/badge/-Visual%20Basic%206.0-000?&logo=Visual%20Basic%206.0)
+![Python](https://img.shields.io/badge/-Python-000?&logo=Python) ![JavaScript](https://img.shields.io/badge/-JavaScript-000?&logo=JavaScript) ![HCL](https://img.shields.io/badge/-HCL-000?&logo=HCL) ![Makefile](https://img.shields.io/badge/-Makefile-000?&logo=Makefile) ![TypeScript](https://img.shields.io/badge/-TypeScript-000?&logo=TypeScript) ![C](https://img.shields.io/badge/-C-000?&logo=C) ![VBA](https://img.shields.io/badge/-VBA-000?&logo=VBA) ![Visual Basic 6.0](https://img.shields.io/badge/-Visual%20Basic%206.0-000?&logo=Visual%20Basic%206.0)
 
 
 ### Frontend development
 
-![React](https://img.shields.io/badge/-React-000?&logo=React) ![Next.js](https://img.shields.io/badge/-Next.js-000?&logo=Next.js)
+![React](https://img.shields.io/badge/-React-000?&logo=React) ![Next.js](https://img.shields.io/badge/-Next.js-000?&logo=Next.js) ![Vite](https://img.shields.io/badge/-Vite-000?&logo=Vite)
 
 
 ### Services & Frameworks
